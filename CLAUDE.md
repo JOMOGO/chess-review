@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single-user **Windows desktop application** that imports a chess.com player's full game history, analyzes every position with Stockfish 18, and surfaces cross-game weaknesses (opening leaks, phase performance, time pressure, accuracy trend, opening win rates, rating performance).
 
-The implementation diverges from `CHESS_REVIEW_SPEC.md` — that document describes a Docker/Postgres/Redis/ARQ web service; the real code is a PyInstaller-packaged native app. Trust the code over the spec when they conflict:
+The original brief for this project described a Docker/Postgres/Redis/ARQ web service; the real code is a PyInstaller-packaged native app. Trust the code over any older spec docs when they conflict:
 
 | Spec says | Code actually uses |
 |---|---|

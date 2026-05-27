@@ -24,4 +24,4 @@ First public release. Windows desktop app, single-user, ships as a PyInstaller `
 - Auto-sized engine `Hash` MB per worker (≈ 1/4 RAM split across pool, clamped to [256, 1024]).
 - Optional Syzygy tablebase support via `CHESS_REVIEW_SYZYGY_PATH`.
 
-[1.0.0]: https://github.com/REPLACE_ME/chess-review/releases/tag/v1.0.0
+[1.0.0]: https://github.com/JOMOGO/chess-review/releases/tag/v1.0.0
