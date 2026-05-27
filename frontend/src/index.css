@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-card: #16162a;
+  --bg-hover: #1e1e3a;
+  --border: #374151;
+  --text-primary: #ffffff;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --chart-grid: #374151;
+  --chart-axis: #9ca3af;
+  --tooltip-bg: #16162a;
+  --tooltip-border: #374151;
+}
+
+[data-theme="light"] {
+  --bg-primary: #f5f6fa;
+  --bg-card: #ffffff;
+  --bg-hover: #f3f4f6;
+  --border: #e5e7eb;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+  --chart-grid: #e5e7eb;
+  --chart-axis: #6b7280;
+  --tooltip-bg: #ffffff;
+  --tooltip-border: #d1d5db;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* --- Light mode: rewrite hardcoded dark Tailwind tokens to the light palette --- */
+/* Backgrounds */
+[data-theme="light"] .bg-\[\#16162a\],
+[data-theme="light"] .bg-\[\#1e1e3a\] {
+  background: var(--bg-card) !important;
+}
+[data-theme="light"] .bg-\[\#1a1a2e\] {
+  background: var(--bg-primary) !important;
+}
+
+/* Borders */
+[data-theme="light"] .border-gray-700,
+[data-theme="light"] .border-gray-600,
+[data-theme="light"] .border-gray-500 {
+  border-color: var(--border) !important;
+}
+
+/* Text colors */
+[data-theme="light"] .text-white {
+  color: var(--text-primary) !important;
+}
+[data-theme="light"] .text-gray-300,
+[data-theme="light"] .text-gray-400 {
+  color: var(--text-secondary) !important;
+}
+[data-theme="light"] .text-gray-500,
+[data-theme="light"] .text-gray-600 {
+  color: var(--text-muted) !important;
+}
+
+/* Hover states */
+[data-theme="light"] .hover\:border-indigo-500:hover {
+  border-color: #6366f1 !important;
+}
+[data-theme="light"] .hover\:bg-gray-700\/50:hover,
+[data-theme="light"] .hover\:bg-gray-700:hover {
+  background: var(--bg-hover) !important;
+}
+[data-theme="light"] .hover\:text-white:hover {
+  color: var(--text-primary) !important;
+}
+
+/* Tinted backgrounds used for badges / pills */
+[data-theme="light"] .bg-green-900\/50 {
+  background: #dcfce7 !important;
+}
+[data-theme="light"] .bg-red-900\/50 {
+  background: #fee2e2 !important;
+}
+[data-theme="light"] .bg-gray-700\/50 {
+  background: var(--bg-hover) !important;
+}
+[data-theme="light"] .bg-indigo-600\/30,
+[data-theme="light"] .bg-indigo-600\/20 {
+  background: #e0e7ff !important;
+}
+
+/* Result colors should stay legible on white */
+[data-theme="light"] .text-green-400 {
+  color: #15803d !important;
+}
+[data-theme="light"] .text-red-400 {
+  color: #b91c1c !important;
+}
+[data-theme="light"] .text-yellow-400 {
+  color: #b45309 !important;
+}
+[data-theme="light"] .text-orange-400 {
+  color: #c2410c !important;
+}
+[data-theme="light"] .text-indigo-400,
+[data-theme="light"] .text-indigo-300 {
+  color: #4338ca !important;
+}
+
+/* Card-and-chart specific helper class so Recharts panels look right */
+.card-surface {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}

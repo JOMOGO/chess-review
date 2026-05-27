@@ -1,0 +1,47 @@
+[project]
+name = "chess-review"
+version = "1.0.0"
+description = "Single-user desktop app that analyses your chess.com history with Stockfish to find cross-game weaknesses."
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-only" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "python-chess>=1.999",
+    "httpx>=0.28",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "alembic>=1.14",
+    "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "mypy>=1.13",
+]
+build = [
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+chess-review = "chess_review.entry:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+plugins = []

@@ -1,0 +1,107 @@
+# ============================================================================
+# Build / packaging artifacts
+# ============================================================================
+# PyInstaller output + intermediates
+/dist/
+/build/
+*.spec.bak
+
+# Frontend build output (also covered by frontend/.gitignore)
+/frontend/dist/
+/frontend/dist-ssr/
+
+# Build logs
+build.log
+/frontend/build.log
+
+# ============================================================================
+# Runtime data (per-user, dev-mode only)
+# ============================================================================
+# In dev mode the app writes the SQLite DB, log, downloaded Stockfish, and
+# WebView2 profile into <repo>/data/. In the frozen exe it writes to
+# %LOCALAPPDATA%/ChessReview/ instead — that directory is outside the repo.
+/data/
+
+# ============================================================================
+# Engine binaries
+# ============================================================================
+# Stockfish is auto-downloaded into %LOCALAPPDATA%/ChessReview/engine/ on
+# first launch of the frozen exe (see backend/src/chess_review/engine/
+# sf_download.py). We don't ship one in the repo.
+/stockfish/
+
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+env/
+ENV/
+
+# ============================================================================
+# Node / frontend
+# ============================================================================
+node_modules/
+*.local
+.npm
+.pnpm-store
+.yarn/cache
+.yarn/install-state.gz
+
+# ============================================================================
+# Editor / IDE
+# ============================================================================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# ============================================================================
+# Claude Code local state
+# ============================================================================
+# Per-user permission allowlist + transient lock files. Never commit these.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/plans/
+
+# ============================================================================
+# OS / misc
+# ============================================================================
+*.log
+*.tmp
+*.bak
