@@ -11,6 +11,7 @@ import AccuracyTrend from './pages/AccuracyTrend'
 import OpeningStats from './pages/OpeningStats'
 import RatingPerformance from './pages/RatingPerformance'
 import Recommendations from './pages/Recommendations'
+import TacticalPatterns from './pages/TacticalPatterns'
 import ImportToast from './components/ImportToast'
 import { getStoredPlayer, getStoredImport, isToastVisible, setToastVisible, onImportChanged } from './lib/storage'
 import { useTheme } from './lib/theme'
@@ -38,6 +39,7 @@ function AppRoutes() {
       <Route path="/players/:id/opening-stats" element={<OpeningStats />} />
       <Route path="/players/:id/ratings" element={<RatingPerformance />} />
       <Route path="/players/:id/recommendations" element={<Recommendations />} />
+      <Route path="/players/:id/tactics" element={<TacticalPatterns />} />
     </Routes>
   )
 }

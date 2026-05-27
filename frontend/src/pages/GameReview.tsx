@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useParams, useLocation } from 'react-router-dom'
+import { useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Chessboard } from 'react-chessboard'
 import { Chess } from 'chess.js'
@@ -43,8 +43,14 @@ const CLASS_DESCRIPTIONS: Record<string, string> = {
 
 export default function GameReview() {
   const { id } = useParams<{ id: string }>()
-  const [currentPly, setCurrentPly] = useState(0)
   const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const [currentPly, setCurrentPly] = useState<number>(() => {
+    // Deep-link: ?ply=N jumps straight to that ply (e.g. from the Tactics
+    // page so the user lands on the position right before a missed move).
+    const p = Number.parseInt(searchParams.get('ply') ?? '', 10)
+    return Number.isFinite(p) && p > 0 ? p : 0
+  })
 
   // Determine back destination
   const backTo = location.state?.from || '/'

@@ -116,6 +116,23 @@ export function getRecommendations(playerId: string, range?: TimeRange) {
   );
 }
 
+export function getMotifs(playerId: string, range?: TimeRange) {
+  const qs = buildQs(rangeQs(range));
+  return request<MotifSummary[]>(`/players/${playerId}/insights/motifs${qs}`);
+}
+
+export function getMotifExamples(
+  playerId: string,
+  motif: string,
+  limit = 20,
+  range?: TimeRange,
+) {
+  const qs = buildQs(`limit=${limit}`, rangeQs(range));
+  return request<MotifExample[]>(
+    `/players/${playerId}/insights/motifs/${motif}${qs}`,
+  );
+}
+
 // Health
 export function getHealth() {
   return request<HealthStatus>('/health');
@@ -350,4 +367,25 @@ export interface RecommendationsResponse {
   recommendations: Recommendation[];
   message?: string;
   totals?: { candidates: number; returned: number };
+}
+
+export interface MotifSummary {
+  motif: string;
+  count: number;
+  games: number;
+  blunders: number;
+  mistakes: number;
+}
+
+export interface MotifExample {
+  tactic_id: string;
+  game_id: string;
+  move_id: string;
+  ply: number;
+  san: string;
+  classification: string | null;
+  cp_loss: number | null;
+  opening_name: string | null;
+  user_result: string;
+  played_at: string;
 }

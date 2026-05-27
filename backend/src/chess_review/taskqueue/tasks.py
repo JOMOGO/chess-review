@@ -6,14 +6,22 @@ import uuid as uuid_mod
 from datetime import datetime, timezone
 
 import chess
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from chess_review.config import settings
 from chess_review.db import async_session
 from chess_review.ingestion.chesscom import ChessComClient
 from chess_review.ingestion.pgn_parser import parse_chesscom_game
-from chess_review.models import Game, GameMove, ImportJob, Player, Position, PositionEval
+from chess_review.models import (
+    Game,
+    GameMove,
+    ImportJob,
+    MoveTactic,
+    Player,
+    Position,
+    PositionEval,
+)
 from chess_review.taskqueue.manager import JobState
 
 logger = logging.getLogger(__name__)
@@ -35,6 +43,11 @@ class _Stats:
         self.cloud_hits = 0
         self.tablebase_hits = 0
         self.engine_hits = 0
+        # Running count of unique (game, position) pairs across all imported
+        # games. Matches what the analysis side iterates over (distinct
+        # positions per game, summed), so it equals what the old union-COUNT
+        # query returned — without the quadratic scan.
+        self.imported_positions = 0
 
 
 async def import_and_analyze(
@@ -143,6 +156,15 @@ async def _import_games(
                 if parsed is None:
                     continue
 
+                # Distinct positions referenced by this game's moves. Matches
+                # what _analyze_single_game iterates over (union of before/after
+                # IDs per game), so summing this across games equals the old
+                # union-COUNT query's result.
+                game_unique_positions = len(
+                    {m["position_before_fen_key"] for m in parsed["moves"]}
+                    | {m["position_after_fen_key"] for m in parsed["moves"]}
+                )
+
                 existing = (await session.execute(
                     select(Game.id).where(
                         Game.provider == "chesscom",
@@ -151,25 +173,39 @@ async def _import_games(
                 )).scalar_one_or_none()
                 if existing:
                     stats.imported += 1
+                    stats.imported_positions += game_unique_positions
                     progress.completed_items = stats.imported
                     await game_queue.put(str(existing))
                     continue
 
-                position_map: dict[str, Position] = {}
+                # One bulk SELECT for all unique fen_keys in this game, then a
+                # single add_all + flush for the misses. Replaces N round-trips
+                # (one SELECT + one flush per unique position) with two.
+                unique_pos: dict[str, int] = {}
                 for pos_data in parsed["positions"]:
                     fk = pos_data["fen_key"]
-                    if fk in position_map:
-                        continue
-                    existing_pos = (await session.execute(
-                        select(Position).where(Position.fen_key == fk)
-                    )).scalar_one_or_none()
-                    if existing_pos:
-                        position_map[fk] = existing_pos
-                    else:
-                        pos = Position(fen_key=fk, material=pos_data["material"])
-                        session.add(pos)
+                    if fk not in unique_pos:
+                        unique_pos[fk] = pos_data["material"]
+
+                position_map: dict[str, Position] = {}
+                if unique_pos:
+                    existing_rows = (await session.execute(
+                        select(Position).where(
+                            Position.fen_key.in_(list(unique_pos.keys()))
+                        )
+                    )).scalars().all()
+                    for row in existing_rows:
+                        position_map[row.fen_key] = row
+                    new_positions = [
+                        Position(fen_key=fk, material=material)
+                        for fk, material in unique_pos.items()
+                        if fk not in position_map
+                    ]
+                    if new_positions:
+                        session.add_all(new_positions)
                         await session.flush()
-                        position_map[fk] = pos
+                        for pos in new_positions:
+                            position_map[pos.fen_key] = pos
 
                 game = Game(
                     player_id=pid, provider="chesscom",
@@ -205,39 +241,21 @@ async def _import_games(
                     ))
 
                 stats.imported += 1
+                stats.imported_positions += game_unique_positions
                 progress.completed_items = stats.imported
 
                 # Commit per game so the SQLite write lock is released quickly,
-                # then hand the game to analysis. Heavy stats refresh runs on
-                # the BATCH boundary to avoid recounting every game.
+                # then hand the game to analysis. Stats refresh runs on the
+                # BATCH boundary; total_positions comes from the running
+                # counter (no rescan of GameMove).
                 await session.commit()
                 await game_queue.put(str(game.id))
                 games_since_stats += 1
 
                 if games_since_stats >= BATCH:
-                    # Count per-game distinct positions across (before ∪ after),
-                    # summed across games — matches what _analyze_single_game
-                    # iterates over, so analyzed/total stays consistent.
-                    before_q = (
-                        select(GameMove.game_id.label("gid"),
-                               GameMove.position_before_id.label("pid"))
-                        .join(Game, GameMove.game_id == Game.id)
-                        .where(Game.player_id == pid)
-                    )
-                    after_q = (
-                        select(GameMove.game_id.label("gid"),
-                               GameMove.position_after_id.label("pid"))
-                        .join(Game, GameMove.game_id == Game.id)
-                        .where(Game.player_id == pid)
-                    )
-                    real_total = (await session.execute(
-                        select(func.count()).select_from(
-                            before_q.union(after_q).subquery()
-                        )
-                    )).scalar() or 0
                     job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
                     job.imported_games = stats.imported
-                    job.total_positions = real_total
+                    job.total_positions = stats.imported_positions
                     player_obj = (await session.execute(select(Player).where(Player.id == pid))).scalar_one()
                     player_obj.total_games_imported = stats.imported
                     await session.commit()
@@ -248,6 +266,7 @@ async def _import_games(
             player_obj = (await session.execute(select(Player).where(Player.id == pid))).scalar_one()
             job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
             job.imported_games = stats.imported
+            job.total_positions = stats.imported_positions
             player_obj.total_games_imported = stats.imported
             player_obj.last_imported_at = datetime.now(timezone.utc)
             await session.commit()
@@ -408,6 +427,7 @@ async def _analyze_single_game(
                 move_evals[pos_id_str] = {
                     "eval_cp": existing.eval_cp, "eval_mate": existing.eval_mate,
                     "best_move_uci": existing.best_move_uci,
+                    "pv": existing.pv,
                 }
                 stats.cache_hits += 1
                 stats.analyzed += 1
@@ -493,9 +513,17 @@ async def _analyze_single_game(
             }
             stats.analyzed += 1
 
-        # Deep pass for swing positions — collect swing candidates, bulk-check cache, then analyze misses.
-        swing_candidates: list[object] = []
-        swing_seen: set[str] = set()
+        # Deep pass candidates come from two feeders:
+        #   1. Eval swings — |cp_before - cp_after| > swing_threshold. Catches
+        #      played blunders (eval tanked when you moved).
+        #   2. Missed tactics — user moves where the engine prefers a different
+        #      move and inventory-depth doesn't show a swing. Depth-14 sometimes
+        #      can't see a tactic that depth-25 will; re-eval position_before so
+        #      the classifier reruns on the better number. Capped per game so
+        #      this doesn't explode on amateur games where played != best is
+        #      the common case.
+        deep_candidates: list[object] = []
+        deep_seen: set[str] = set()
         for move in game.moves:
             be = move_evals.get(str(move.position_before_id), {})
             ae = move_evals.get(str(move.position_after_id), {})
@@ -505,18 +533,53 @@ async def _analyze_single_game(
             if abs(cb - ca) > settings.swing_threshold_cp:
                 for pos in [move.position_before, move.position_after]:
                     pid_s = str(pos.id)
-                    if pid_s in swing_seen:
+                    if pid_s in deep_seen:
                         continue
-                    swing_seen.add(pid_s)
-                    swing_candidates.append(pos)
+                    deep_seen.add(pid_s)
+                    deep_candidates.append(pos)
+
+        # Missed-tactic feeder. Score by mover-POV cp_before so the deepest
+        # cases (the ones most likely to hide a tactic) get the budget.
+        missed_scored: list[tuple[int, object, object]] = []
+        for move in game.moves:
+            if not move.is_user_move:
+                continue
+            be = move_evals.get(str(move.position_before_id), {})
+            ae = move_evals.get(str(move.position_after_id), {})
+            best_uci = be.get("best_move_uci", "")
+            if not best_uci or best_uci == move.uci:
+                continue
+            cb = eval_to_cp_fn(be.get("eval_cp"), be.get("eval_mate"))
+            ca = eval_to_cp_fn(ae.get("eval_cp"), ae.get("eval_mate"))
+            if abs(cb - ca) > settings.swing_threshold_cp:
+                continue  # swing path already covered this move
+            pid_before = str(move.position_before_id)
+            if pid_before in deep_seen:
+                continue
+            sign = 1 if move.ply % 2 == 1 else -1
+            mover_cp_before = sign * cb
+            # Skip clearly losing positions — a tactic in a -2 position rarely
+            # rescues the game, and we'd rather spend the budget elsewhere.
+            if mover_cp_before < -100:
+                continue
+            missed_scored.append((mover_cp_before, move.position_before, move.position_after))
+
+        missed_scored.sort(key=lambda x: x[0], reverse=True)
+        for _, pos_before, pos_after in missed_scored[: settings.missed_tactic_max_per_game]:
+            for pos in (pos_before, pos_after):
+                pid_s = str(pos.id)  # type: ignore[attr-defined]
+                if pid_s in deep_seen:
+                    continue
+                deep_seen.add(pid_s)
+                deep_candidates.append(pos)
 
         cached_deep: dict[str, PositionEval] = {}
-        if swing_candidates:
-            swing_ids = [pos.id for pos in swing_candidates]  # type: ignore[attr-defined]
+        if deep_candidates:
+            deep_ids = [pos.id for pos in deep_candidates]  # type: ignore[attr-defined]
             rows = (await session.execute(
                 select(PositionEval)
                 .where(
-                    PositionEval.position_id.in_(swing_ids),
+                    PositionEval.position_id.in_(deep_ids),
                     PositionEval.depth >= settings.deep_depth,
                 )
             )).scalars().all()
@@ -527,11 +590,14 @@ async def _analyze_single_game(
                     cached_deep[key] = row
 
         deep_needed: list[tuple[str, object]] = []
-        for pos in swing_candidates:
+        for pos in deep_candidates:
             pid_s = str(pos.id)  # type: ignore[attr-defined]
             ed = cached_deep.get(pid_s)
             if ed:
-                move_evals[pid_s] = {"eval_cp": ed.eval_cp, "eval_mate": ed.eval_mate, "best_move_uci": ed.best_move_uci}
+                move_evals[pid_s] = {
+                    "eval_cp": ed.eval_cp, "eval_mate": ed.eval_mate,
+                    "best_move_uci": ed.best_move_uci, "pv": ed.pv,
+                }
             else:
                 deep_needed.append((pid_s, pos))
 
@@ -567,7 +633,10 @@ async def _analyze_single_game(
             await session.commit()
 
         # Classify moves
+        from chess_review.analysis.motifs import detect_motifs
+
         board = chess.Board()
+        motif_rows: list[MoveTactic] = []
         for move in game.moves:
             be = move_evals.get(str(move.position_before_id), {})
             ae = move_evals.get(str(move.position_after_id), {})
@@ -591,10 +660,39 @@ async def _analyze_single_game(
             move.classification = classification
             move.phase = classify_phase_fn(board, move.ply)
 
+            # Motif detection on user mistakes/blunders/misses where the
+            # engine recommended a different move. The detector runs on the
+            # engine's preferred line (the tactic the user missed), not on
+            # the move that was played.
+            if (
+                move.is_user_move
+                and classification in ("mistake", "blunder", "miss")
+                and best_uci
+                and best_uci != move.uci
+                and isinstance(be, dict)
+            ):
+                pv_str = be.get("pv", "")
+                if isinstance(pv_str, str):
+                    try:
+                        motifs = detect_motifs(
+                            board.fen(),
+                            best_uci,
+                            pv_str,
+                            be.get("eval_mate") if isinstance(be.get("eval_mate"), int) else None,  # type: ignore[arg-type]
+                        )
+                    except Exception:
+                        logger.exception("Motif detection failed for move %s", move.id)
+                        motifs = []
+                    for motif in motifs:
+                        motif_rows.append(MoveTactic(game_move_id=move.id, motif=motif))
+
             try:
                 board.push_uci(move.uci)
             except Exception:
                 pass
+
+        if motif_rows:
+            session.add_all(motif_rows)
 
         game.analyzed_at = datetime.now(timezone.utc)
 
@@ -634,6 +732,7 @@ def _record_inventory_eval(
     move_evals[pid_s] = {
         "eval_cp": result["eval_cp"], "eval_mate": result["eval_mate"],
         "best_move_uci": result["best_move_uci"],
+        "pv": result.get("pv", ""),
     }
     engine_name = result["engine"]
     if engine_name == "lichess-cloud":
@@ -663,4 +762,5 @@ def _record_deep_eval(
     move_evals[pid_s] = {
         "eval_cp": result["eval_cp"], "eval_mate": result["eval_mate"],
         "best_move_uci": result["best_move_uci"],
+        "pv": result.get("pv", ""),
     }

@@ -14,9 +14,14 @@ class Settings(BaseSettings):
     sf_workers: int = 0  # 0 = auto-detect (half of CPU cores)
     sf_hash_mb: int = 0  # 0 = auto-size per pool_size + available RAM
     sf_threads: int = 1
-    inventory_depth: int = 18
+    inventory_depth: int = 14
     deep_depth: int = 25
     swing_threshold_cp: int = 100
+    # Per-game cap on positions promoted to the deep pass purely because the
+    # engine prefers a move the user didn't play (i.e. potential missed
+    # tactics not caught by the eval-swing trigger). Bounded so this doesn't
+    # explode on amateur games where played != best is the common case.
+    missed_tactic_max_per_game: int = 6
 
     # Syzygy tablebases (path to folder with .rtbw/.rtbz files)
     syzygy_path: str = ""

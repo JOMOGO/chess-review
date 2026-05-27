@@ -163,6 +163,33 @@ class GameMove(Base):
     )
 
 
+class MoveTactic(Base):
+    """A tactical motif detected on a single move.
+
+    One row per (move, motif). A single move can have multiple motifs (e.g. a
+    fork that's also a discovered attack). The detector currently writes only
+    for moves classified ``mistake``/``blunder``/``miss`` — i.e. tactics the
+    user *missed*. Positive cases ("you found a fork") are not yet recorded.
+    """
+
+    __tablename__ = "move_tactics"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_new_uuid)
+    game_move_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("game_moves.id"), nullable=False
+    )
+    motif: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_move_tactics_move_motif", "game_move_id", "motif", unique=True),
+        Index("ix_move_tactics_motif", "motif"),
+    )
+
+
 class ImportJob(Base):
     __tablename__ = "import_jobs"
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from chess_review.analytics.accuracy import get_accuracy_trend
+from chess_review.analytics.motifs import get_motif_examples, get_motif_summary
 from chess_review.analytics.opening_tree import build_opening_tree
 from chess_review.analytics.openings_winrate import get_opening_stats
 from chess_review.analytics.phase_split import get_phase_performance
@@ -132,5 +133,31 @@ async def recommendations(
 ) -> dict[str, object]:
     return await get_recommendations(
         session, player_id,
+        since=_resolve_since(range, None),
+    )
+
+
+@router.get("/motifs")
+async def motifs(
+    player_id: uuid.UUID,
+    range: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    return await get_motif_summary(
+        session, player_id,
+        since=_resolve_since(range, None),
+    )
+
+
+@router.get("/motifs/{motif}")
+async def motif_examples(
+    player_id: uuid.UUID,
+    motif: str,
+    limit: int = 20,
+    range: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    return await get_motif_examples(
+        session, player_id, motif, limit=limit,
         since=_resolve_since(range, None),
     )
