@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from chess_review.api.analysis import router as analysis_router
 from chess_review.api.games import router as games_router
@@ -17,8 +17,10 @@ from chess_review.api.players import router as players_router
 from chess_review.config import settings
 from chess_review.db import Base, async_session, engine
 from chess_review.engine.stockfish_pool import StockfishPool, auto_hash_mb
+from chess_review.models import Game
 from chess_review.schemas import HealthResponse
 from chess_review.taskqueue.manager import TaskManager
+from chess_review.taskqueue.tasks import reanalyze_player
 from chess_review.util.paths import get_static_dir
 
 from chess_review.util.paths import get_app_data_dir
@@ -45,10 +47,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured")
 
-    # Auto-detect worker count
+    # Auto-detect worker count. Leave 2 cores free for the user (browser,
+    # OS, IDE) so analysis doesn't freeze the machine, then run one worker
+    # per remaining core with Threads=1. That maximises parallelism on
+    # multi-game imports (each game pins one engine, so more workers = more
+    # games in flight). Power users can override via CHESS_REVIEW_SF_WORKERS.
     import os
-    worker_count = settings.sf_workers or max(1, (os.cpu_count() or 4) // 2)
-    logger.info("Using %d Stockfish workers (cores: %s)", worker_count, os.cpu_count())
+    cpu_count = os.cpu_count() or 4
+    worker_count = settings.sf_workers or max(1, cpu_count - 2)
+    logger.info(
+        "Using %d Stockfish workers (cores: %d, threads/engine: %d)",
+        worker_count, cpu_count, settings.sf_threads,
+    )
 
     # Start task manager
     tm = TaskManager(max_concurrent=worker_count)
@@ -75,6 +85,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await sf.start()
     app.state.sf_pool = sf
+
+    # Recover analysis for any games whose previous session was interrupted —
+    # app killed mid-analysis, Stockfish crashed, etc. One reanalysis task
+    # per affected player so the toast shows progress.
+    if sf.available:
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(Game.player_id, func.count(Game.id))
+                .where(Game.analyzed_at.is_(None))
+                .group_by(Game.player_id)
+            )).all()
+        for player_id, count in rows:
+            logger.info(
+                "Recovering %d unanalyzed game(s) for player %s",
+                count, player_id,
+            )
+            await tm.enqueue(reanalyze_player, str(player_id), sf_pool=sf)
 
     yield
 

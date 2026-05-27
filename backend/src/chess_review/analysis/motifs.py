@@ -33,6 +33,10 @@ SKEWER = "skewer"
 DISCOVERED_ATTACK = "discovered_attack"
 REMOVAL_OF_DEFENDER = "removal_of_defender"
 BACK_RANK_MATE = "back_rank_mate"
+SMOTHERED_MATE = "smothered_mate"
+TRAPPED_PIECE = "trapped_piece"
+DEFLECTION = "deflection"
+PAWN_PROMOTION = "pawn_promotion"
 
 ALL_MOTIFS = (
     FORK,
@@ -41,6 +45,10 @@ ALL_MOTIFS = (
     DISCOVERED_ATTACK,
     REMOVAL_OF_DEFENDER,
     BACK_RANK_MATE,
+    SMOTHERED_MATE,
+    TRAPPED_PIECE,
+    DEFLECTION,
+    PAWN_PROMOTION,
 )
 
 
@@ -84,6 +92,15 @@ def detect_motifs(
     if _is_back_rank_mate(board, best_move, eval_mate):
         motifs.add(BACK_RANK_MATE)
 
+    if _is_trapped_piece(board, best_move):
+        motifs.add(TRAPPED_PIECE)
+
+    if _is_deflection(board, best_move, pv_moves):
+        motifs.add(DEFLECTION)
+
+    if best_move.promotion is not None:
+        motifs.add(PAWN_PROMOTION)
+
     # Snapshot attacker state BEFORE the move so we can diff after.
     mover_color = board.turn
     from_sq = best_move.from_square
@@ -94,6 +111,9 @@ def detect_motifs(
 
     # Push the move and inspect the resulting board.
     board.push(best_move)
+
+    if _is_smothered_mate(board, best_move):
+        motifs.add(SMOTHERED_MATE)
 
     if _is_fork(board, best_move, mover_color):
         motifs.add(FORK)
@@ -340,4 +360,129 @@ def _is_back_rank_mate(
         p = board_before.piece_at(sq)
         if p is None or p.color != enemy or p.piece_type != chess.PAWN:
             return False
+    return True
+
+
+def _is_smothered_mate(board_after: chess.Board, move: chess.Move) -> bool:
+    """Knight delivers checkmate. By definition the king is smothered —
+    blocked by its own pieces (and the knight) since the king has no legal
+    escape from a knight check.
+    """
+    moved_piece = board_after.piece_at(move.to_square)
+    if moved_piece is None or moved_piece.piece_type != chess.KNIGHT:
+        return False
+    if not board_after.is_check():
+        return False
+    try:
+        return board_after.is_checkmate()
+    except Exception:
+        return False
+
+
+def _is_trapped_piece(board_before: chess.Board, move: chess.Move) -> bool:
+    """Best move captures an enemy minor/major piece that itself had no safe
+    square to escape to. The trapped piece is at ``move.to_square`` before
+    the move.
+
+    Pawns and kings are excluded — pawn trapping isn't interesting
+    tactically and king "trapping" is mate, which has its own detectors.
+    """
+    target = board_before.piece_at(move.to_square)
+    if target is None or target.piece_type in (chess.KING, chess.PAWN):
+        return False
+    target_val = _PIECE_VALUE[target.piece_type]
+    if target_val < _PIECE_VALUE[chess.KNIGHT]:
+        return False
+
+    test_board = board_before.copy(stack=False)
+    target_color = target.color
+    target_sq = move.to_square
+
+    # Pretend it's the target's turn so we can enumerate the target's own
+    # legal moves. Castling/EP edge cases don't matter for a mid-board piece
+    # being trapped; if turn-flip produces an invalid state, bail.
+    test_board.turn = target_color
+    try:
+        legal = [m for m in test_board.legal_moves if m.from_square == target_sq]
+    except Exception:
+        return False
+    if not legal:
+        return True  # piece literally cannot move
+
+    for escape in legal:
+        test_board.push(escape)
+        new_sq = escape.to_square
+        new_piece = test_board.piece_at(new_sq)
+        if new_piece is None:
+            test_board.pop()
+            continue
+        attackers = test_board.attackers(not target_color, new_sq)
+        if not attackers:
+            test_board.pop()
+            return False  # escape square is safe
+        defenders = test_board.attackers(target_color, new_sq)
+        if defenders:
+            min_attacker_val = min(
+                _PIECE_VALUE[test_board.piece_at(a).piece_type]
+                for a in attackers
+                if test_board.piece_at(a) is not None
+            )
+            if min_attacker_val >= _PIECE_VALUE[new_piece.piece_type]:
+                test_board.pop()
+                return False  # adequately defended at this square
+        test_board.pop()
+    return True
+
+
+def _is_deflection(
+    board_before: chess.Board,
+    move: chess.Move,
+    pv_moves: list[chess.Move],
+) -> bool:
+    """Best move is a check (or major capture-threat) that pulls an enemy
+    defender off a key square. PV pattern: [our check, forced enemy reply,
+    our capture of something the defender used to protect].
+    """
+    if len(pv_moves) < 3:
+        return False
+    if not board_before.gives_check(move):
+        return False
+
+    enemy_reply = pv_moves[1]
+    our_capture = pv_moves[2]
+
+    test_board = board_before.copy(stack=False)
+    enemy_color = not test_board.turn
+
+    # Did the defender that's about to move actually defend the future
+    # capture target? Snapshot defenders BEFORE pushing anything.
+    target_sq = our_capture.to_square
+    defenders_before = test_board.attackers(enemy_color, target_sq)
+    if enemy_reply.from_square not in defenders_before:
+        return False
+
+    target_piece = test_board.piece_at(target_sq)
+    if target_piece is None or target_piece.color == test_board.turn:
+        return False
+    if _PIECE_VALUE[target_piece.piece_type] < _PIECE_VALUE[chess.KNIGHT]:
+        return False
+
+    # Walk the PV: our check, forced reply, our capture. If all three are
+    # legal in sequence, the deflection pattern holds.
+    try:
+        if move not in test_board.legal_moves:
+            return False
+        test_board.push(move)
+        if enemy_reply not in test_board.legal_moves:
+            return False
+        test_board.push(enemy_reply)
+        if our_capture not in test_board.legal_moves:
+            return False
+        # Confirm the capture actually wins something.
+        captured = test_board.piece_at(our_capture.to_square)
+        if captured is None or captured.color == test_board.turn:
+            return False
+    except Exception:
+        return False
+
     return True

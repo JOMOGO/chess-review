@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -45,26 +45,24 @@ class ChessComClient:
             logger.exception("Failed to fetch archive %s", archive_url)
             return []
 
-    async def get_all_games(self, username: str) -> list[dict[str, Any]]:
-        """Fetch all games for a player, sorted newest first.
+    async def stream_all_games(self, username: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield games newest-month-first as each monthly archive arrives.
 
-        Chess.com archives are monthly and return games oldest-first within
-        each month, so we sort the merged list by ``end_time`` descending to
-        get strict newest-first ordering. The import queue is FIFO so this
-        order is preserved through analysis.
+        Compared to building one big list, streaming lets the consumer start
+        ingesting + analyzing games as soon as the first archive returns
+        (~0.5s) rather than waiting for the full walk (~0.25s * months).
+
+        Order is "newest-month-first, within-archive newest-first" — not
+        strictly globally newest-first (a late-March game can show up after
+        an early-April game), but the boundary case is rare and not worth
+        materializing the whole list to fix.
         """
-        archives = await self.get_archives(username)
-        # Walk archives newest-month-first so we can show progress in a
-        # newest-first order even before the final sort.
-        archives = list(reversed(archives))
+        archives = list(reversed(await self.get_archives(username)))
         logger.info("Found %d archives for %s (newest first)", len(archives), username)
-        all_games: list[dict[str, Any]] = []
         for i, url in enumerate(archives):
             games = await self.get_monthly_games(url)
-            all_games.extend(games)
-            logger.info(
-                "Archive %d/%d: %d games (total: %d)",
-                i + 1, len(archives), len(games), len(all_games),
-            )
-        all_games.sort(key=lambda g: g.get("end_time") or 0, reverse=True)
-        return all_games
+            logger.info("Archive %d/%d: %d games", i + 1, len(archives), len(games))
+            # chess.com returns each month oldest-first; reverse so within a
+            # month the most recent game is yielded first.
+            for game in reversed(games):
+                yield game

@@ -19,6 +19,10 @@ const MOTIF_LABEL: Record<string, string> = {
   discovered_attack: 'Discovered Attacks',
   removal_of_defender: 'Removal of Defender',
   back_rank_mate: 'Back-Rank Mates',
+  smothered_mate: 'Smothered Mates',
+  trapped_piece: 'Trapped Pieces',
+  deflection: 'Deflections',
+  pawn_promotion: 'Pawn Promotions',
 }
 
 const MOTIF_DESCRIPTION: Record<string, string> = {
@@ -28,6 +32,10 @@ const MOTIF_DESCRIPTION: Record<string, string> = {
   discovered_attack: 'Engine could have moved a piece that, by moving, uncovered an attack from a second piece behind it. You played something else.',
   removal_of_defender: 'Engine could have captured a piece whose only job was defending another piece, leaving that piece hanging. You played something else.',
   back_rank_mate: 'Engine had a short forced mate on the back rank. You played something else.',
+  smothered_mate: 'Engine had a knight checkmate where the enemy king was blocked in by its own pieces. You played something else.',
+  trapped_piece: 'Engine could have captured an enemy piece that had no safe square to escape to. You played something else.',
+  deflection: 'Engine could have played a check that forced an enemy piece away from a key defensive duty, winning material on the follow-up. You played something else.',
+  pawn_promotion: 'Engine could have pushed a pawn to promotion. You played something else.',
 }
 
 const MOTIF_COLOR: Record<string, string> = {
@@ -37,6 +45,10 @@ const MOTIF_COLOR: Record<string, string> = {
   discovered_attack: '#06b6d4',
   removal_of_defender: '#22c55e',
   back_rank_mate: '#ef4444',
+  smothered_mate: '#fbbf24',
+  trapped_piece: '#14b8a6',
+  deflection: '#8b5cf6',
+  pawn_promotion: '#10b981',
 }
 
 export default function TacticalPatterns() {

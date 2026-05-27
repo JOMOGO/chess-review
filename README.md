@@ -57,8 +57,9 @@ Anything in `backend/src/chess_review/config.py::Settings` accepts a `CHESS_REVI
 | Variable | Default | Effect |
 |---|---|---|
 | `CHESS_REVIEW_INVENTORY_DEPTH` | 14 | Shallow-pass depth |
-| `CHESS_REVIEW_DEEP_DEPTH` | 22 | Deep-pass depth around eval swings |
-| `CHESS_REVIEW_SF_WORKERS` | half of CPU cores | Stockfish pool size |
+| `CHESS_REVIEW_DEEP_DEPTH` | 25 | Deep-pass depth around eval swings |
+| `CHESS_REVIEW_SF_WORKERS` | `cores - 2` (min 1) | Stockfish pool size; leaves 2 cores free for the user |
+| `CHESS_REVIEW_SF_THREADS` | 1 | Threads per engine; raise for fewer-but-faster games |
 | `CHESS_REVIEW_SF_HASH_MB` | auto (≈ 1/4 RAM ÷ pool) | Per-engine hash, clamped to [256, 1024] |
 | `CHESS_REVIEW_SYZYGY_PATH` | unset | Directory of `.rtbw/.rtbz` tablebase files |
 | `CHESS_REVIEW_LICHESS_CLOUD_ENABLED` | `true` | Use Lichess cloud eval cache for opening positions |

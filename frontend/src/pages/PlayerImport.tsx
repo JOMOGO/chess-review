@@ -2,10 +2,13 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { createPlayer, startImport } from '../api/client'
-import { setStoredPlayer, setStoredImport } from '../lib/storage'
+import { getStoredPlayer, setStoredPlayer, setStoredImport } from '../lib/storage'
 
 export default function PlayerImport() {
-  const [username, setUsername] = useState('')
+  // Seed with the last-used username so the form isn't empty after a fresh
+  // launch with stale storage. The App-level redirect normally short-circuits
+  // this page entirely when storage is healthy.
+  const [username, setUsername] = useState(() => getStoredPlayer()?.username ?? '')
   const navigate = useNavigate()
 
   const importMutation = useMutation({

@@ -127,6 +127,83 @@ async def import_and_analyze(
 import_player_games = import_and_analyze
 
 
+async def reanalyze_player(
+    player_id: str,
+    *,
+    sf_pool: object,
+    progress: JobState,
+) -> None:
+    """Re-run analysis on every game belonging to ``player_id`` whose
+    ``analyzed_at`` is still NULL.
+
+    Used by the startup recovery hook to clean up games whose analysis was
+    interrupted in a previous session (app killed mid-analysis, dead
+    Stockfish engines, etc.). Creates a synthetic ``ImportJob`` so the
+    existing progress UI (toast + ``/import/status``) shows the work.
+    """
+    pid = uuid_mod.UUID(player_id)
+    stats = _Stats()
+    game_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    async with async_session() as session:
+        game_ids = (await session.execute(
+            select(Game.id).where(
+                Game.player_id == pid,
+                Game.analyzed_at.is_(None),
+            )
+        )).scalars().all()
+        if not game_ids:
+            return
+
+        job = ImportJob(
+            player_id=pid,
+            status="running",
+            total_games=len(game_ids),
+            imported_games=len(game_ids),
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job)
+        jid = job.id
+
+    progress.total_items = len(game_ids)
+    progress.completed_items = len(game_ids)  # all already imported
+    for gid in game_ids:
+        await game_queue.put(str(gid))
+    await game_queue.put(_SENTINEL)
+
+    try:
+        await _analyze_from_queue(pid, jid, sf_pool, stats, progress, game_queue)
+        async with async_session() as session:
+            job = (await session.execute(
+                select(ImportJob).where(ImportJob.id == jid)
+            )).scalar_one()
+            job.status = "done"
+            job.completed_at = datetime.now(timezone.utc)
+            job.analyzed_games = stats.games_done
+            job.analyzed_positions = stats.analyzed
+            await session.commit()
+        logger.info(
+            "Reanalysis done for player %s: %d games, %d positions",
+            player_id, stats.games_done, stats.analyzed,
+        )
+    except Exception as e:
+        logger.exception("Reanalysis failed for player %s", player_id)
+        async with async_session() as session:
+            try:
+                job = (await session.execute(
+                    select(ImportJob).where(ImportJob.id == jid)
+                )).scalar_one()
+                job.status = "failed"
+                job.error = str(e)
+                job.completed_at = datetime.now(timezone.utc)
+                await session.commit()
+            except Exception:
+                logger.exception("Failed to update reanalysis job status")
+        raise
+
+
 async def _import_games(
     pid: uuid_mod.UUID,
     jid: uuid_mod.UUID,
@@ -136,25 +213,52 @@ async def _import_games(
     progress: JobState,
     game_queue: asyncio.Queue[str],
 ) -> None:
-    """Download and import games, pushing IDs to the analysis queue."""
+    """Download and import games, pushing IDs to the analysis queue.
+
+    Streams chess.com archives newest-month-first so analysis can start
+    within ~1s of the first archive landing instead of waiting for every
+    monthly archive to be fetched. ``total_games`` grows as each archive
+    arrives — the frontend tolerates total_games < imported_games briefly
+    (it just hides the ratio) and the running counter stabilises once the
+    last archive is consumed.
+    """
     try:
         async with async_session() as session:
             logger.info("Fetching games for %s", username)
-            raw_games = await client.get_all_games(username)
-
-            job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
-            job.total_games = len(raw_games)
-            stats.total_games = len(raw_games)
-            progress.total_items = len(raw_games)
-            await session.commit()
 
             BATCH = 25
             games_since_stats = 0
+            casing_synced = False
 
-            for raw in raw_games:
+            async for raw in client.stream_all_games(username):
+                stats.total_games += 1
                 parsed = parse_chesscom_game(raw, username)
                 if parsed is None:
                     continue
+
+                # The first game we successfully parse carries the player's
+                # canonical chess.com casing in its [White]/[Black] header.
+                # If the stored Player row was created from a lowercase typed
+                # username, sync it to the canonical form for display.
+                if not casing_synced:
+                    casing_synced = True
+                    target_lower = username.lower()
+                    canonical: str | None = None
+                    if parsed["white_username"].lower() == target_lower:
+                        canonical = parsed["white_username"]
+                    elif parsed["black_username"].lower() == target_lower:
+                        canonical = parsed["black_username"]
+                    if canonical and canonical != username:
+                        player_obj = (await session.execute(
+                            select(Player).where(Player.id == pid)
+                        )).scalar_one()
+                        if player_obj.username != canonical:
+                            logger.info(
+                                "Syncing player username casing: %s -> %s",
+                                player_obj.username, canonical,
+                            )
+                            player_obj.username = canonical
+                            await session.commit()
 
                 # Distinct positions referenced by this game's moves. Matches
                 # what _analyze_single_game iterates over (union of before/after
@@ -255,17 +359,23 @@ async def _import_games(
                 if games_since_stats >= BATCH:
                     job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
                     job.imported_games = stats.imported
+                    # total_games grows as archives stream in — flush it so
+                    # the frontend's progress bar tracks the actual count.
+                    job.total_games = stats.total_games
+                    progress.total_items = stats.total_games
                     job.total_positions = stats.imported_positions
                     player_obj = (await session.execute(select(Player).where(Player.id == pid))).scalar_one()
                     player_obj.total_games_imported = stats.imported
                     await session.commit()
-                    logger.info("Imported %d/%d games", stats.imported, len(raw_games))
+                    logger.info("Imported %d/%d games", stats.imported, stats.total_games)
                     games_since_stats = 0
 
             # Final update
             player_obj = (await session.execute(select(Player).where(Player.id == pid))).scalar_one()
             job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
             job.imported_games = stats.imported
+            job.total_games = stats.total_games
+            progress.total_items = stats.total_games
             job.total_positions = stats.imported_positions
             player_obj.total_games_imported = stats.imported
             player_obj.last_imported_at = datetime.now(timezone.utc)
@@ -565,6 +675,11 @@ async def _analyze_single_game(
             missed_scored.append((mover_cp_before, move.position_before, move.position_after))
 
         missed_scored.sort(key=lambda x: x[0], reverse=True)
+        if len(missed_scored) > settings.missed_tactic_max_per_game:
+            logger.info(
+                "Game %s: missed-tactic cap hit (%d candidates, keeping top %d)",
+                gid, len(missed_scored), settings.missed_tactic_max_per_game,
+            )
         for _, pos_before, pos_after in missed_scored[: settings.missed_tactic_max_per_game]:
             for pos in (pos_before, pos_after):
                 pid_s = str(pos.id)  # type: ignore[attr-defined]

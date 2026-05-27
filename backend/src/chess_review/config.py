@@ -11,8 +11,12 @@ class Settings(BaseSettings):
 
     # Stockfish
     stockfish_path: str = ""
-    sf_workers: int = 0  # 0 = auto-detect (half of CPU cores)
+    # 0 = auto: cores - 2 (leaves 2 cores free for the user; min 1)
+    sf_workers: int = 0
     sf_hash_mb: int = 0  # 0 = auto-size per pool_size + available RAM
+    # Threads per Stockfish engine. We default to 1 so each game gets its
+    # own dedicated engine (max parallelism). Raise this only if you have
+    # very few games to analyse and want each one to finish faster.
     sf_threads: int = 1
     inventory_depth: int = 14
     deep_depth: int = 25
@@ -21,7 +25,7 @@ class Settings(BaseSettings):
     # engine prefers a move the user didn't play (i.e. potential missed
     # tactics not caught by the eval-swing trigger). Bounded so this doesn't
     # explode on amateur games where played != best is the common case.
-    missed_tactic_max_per_game: int = 6
+    missed_tactic_max_per_game: int = 10
 
     # Syzygy tablebases (path to folder with .rtbw/.rtbz files)
     syzygy_path: str = ""

@@ -35,6 +35,25 @@ import webview  # noqa: E402 — must be imported after env var is set
 
 
 def _find_free_port() -> int:
+    """Pick a port, preferring ``settings.port`` so localStorage persists.
+
+    WebView2 keys ``localStorage`` per origin, and the origin includes the
+    port — so a random port on every launch gives every launch a different
+    origin and an empty ``localStorage`` (no stored player, no theme, no
+    nothing). Sticking to a fixed port keeps the origin stable across
+    launches. Fall back to an OS-assigned free port if the configured one
+    is genuinely busy (another instance already running, or another app
+    holding it).
+    """
+    from chess_review.config import settings
+
+    preferred = settings.port
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", preferred))
+        return preferred
+    except OSError:
+        pass
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]

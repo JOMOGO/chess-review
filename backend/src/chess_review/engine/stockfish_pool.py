@@ -98,26 +98,11 @@ class StockfishPool:
             return
 
         for i in range(self._pool_size):
-            try:
-                _, engine = await chess.engine.popen_uci(self._path, **_POPEN_FLAGS)
-
-                uci_options: dict[str, object] = {
-                    "Threads": settings.sf_threads,
-                    "Hash": self._hash_mb,
-                }
-
-                # Syzygy endgame tablebases — perfect play in <=7 piece endgames
-                if settings.syzygy_path and Path(settings.syzygy_path).is_dir():
-                    uci_options["SyzygyPath"] = settings.syzygy_path
-                    uci_options["SyzygyProbeLimit"] = 7
-                    logger.info("Syzygy tablebases enabled: %s", settings.syzygy_path)
-
-                await engine.configure(uci_options)
+            engine = await self._spawn_one()
+            if engine is not None:
                 self._engines.append(engine)
                 await self._available.put(engine)
                 logger.info("Started Stockfish instance %d/%d", i + 1, self._pool_size)
-            except Exception:
-                logger.exception("Failed to start Stockfish instance %d", i + 1)
 
         self._started = True
         if self._engines:
@@ -125,6 +110,58 @@ class StockfishPool:
                 "StockfishPool ready: %d/%d engines (%s)",
                 len(self._engines), self._pool_size, self.engine_name,
             )
+
+    async def _spawn_one(self) -> chess.engine.UciProtocol | None:
+        """Open one Stockfish process and configure it. Returns ``None`` on
+        failure so the caller can leave that slot empty.
+        """
+        try:
+            _, engine = await chess.engine.popen_uci(self._path, **_POPEN_FLAGS)
+            uci_options: dict[str, object] = {
+                "Threads": settings.sf_threads,
+                "Hash": self._hash_mb,
+            }
+            if settings.syzygy_path and Path(settings.syzygy_path).is_dir():
+                uci_options["SyzygyPath"] = settings.syzygy_path
+                uci_options["SyzygyProbeLimit"] = 7
+            await engine.configure(uci_options)
+            return engine
+        except Exception:
+            logger.exception("Failed to spawn Stockfish")
+            return None
+
+    @staticmethod
+    def _engine_alive(engine: chess.engine.UciProtocol) -> bool:
+        """True if the engine's subprocess is still running."""
+        transport = getattr(engine, "transport", None)
+        if transport is None:
+            return False
+        # asyncio transports expose is_closing(); also check returncode where
+        # available for belt-and-braces.
+        try:
+            if transport.is_closing():
+                return False
+        except Exception:
+            return False
+        proc = getattr(transport, "_proc", None)
+        if proc is not None and getattr(proc, "returncode", None) is not None:
+            return False
+        return True
+
+    async def _replace_dead(self) -> None:
+        """Spawn a fresh Stockfish to fill a slot a dead engine just vacated."""
+        logger.warning("Replacing dead Stockfish engine")
+        new_engine = await self._spawn_one()
+        if new_engine is None:
+            logger.error(
+                "Could not respawn Stockfish; pool size effectively reduced"
+            )
+            # Don't release the semaphore — we have one fewer real engine now.
+            # Better to run at reduced capacity than hand out a poison slot.
+            return
+        self._engines.append(new_engine)
+        self._available.put_nowait(new_engine)
+        self._semaphore.release()
 
     async def stop(self) -> None:
         for eng in self._engines:
@@ -185,8 +222,28 @@ class StockfishPool:
         return engine
 
     def release(self, engine: chess.engine.UciProtocol | None) -> None:
-        """Return a previously-acquired engine to the pool."""
+        """Return a previously-acquired engine to the pool, replacing it
+        with a fresh process if it died.
+
+        Stockfish can crash (OOM, weird position, internal bug); without
+        this check the dead process would go back in the queue and every
+        subsequent ``analyse`` call against it would raise
+        ``EngineTerminatedError``, silently failing entire games. Detecting
+        a dead transport here and respawning in the background means one
+        crash kills exactly one game's analysis, not every game queued
+        behind it on that engine.
+        """
         if engine is None:
+            return
+        if not self._engine_alive(engine):
+            try:
+                self._engines.remove(engine)
+            except ValueError:
+                pass
+            # Replacement is async (popen + configure); fire-and-forget so
+            # the caller's release() returns immediately. Semaphore stays
+            # decremented until the new engine is ready.
+            asyncio.create_task(self._replace_dead())
             return
         self._available.put_nowait(engine)
         self._semaphore.release()

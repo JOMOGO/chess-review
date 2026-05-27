@@ -55,7 +55,7 @@ After all evals land, `classify_move` (in `analysis_orchestrator.py`) labels eac
 React 19 + Vite + Tailwind 4 + TanStack Query + `react-chessboard` + Recharts + `react-router-dom` v7. `frontend/vite.config.ts` proxies `/api` to `http://localhost:18765` for dev. Routes live in `App.tsx`; pages in `src/pages/`; the API client (with all response type defs) is `src/api/client.ts`. Dark mode + import progress toast persist via `lib/storage.ts` (localStorage).
 
 ### Configuration
-`config.py` uses `pydantic-settings` with `CHESS_REVIEW_` env prefix and `.env`. Defaults are tuned for the desktop case: `sf_workers=0` (auto = half of CPU cores), `sf_hash_mb=0` (auto), `port=18765`, no DB URL (falls back to `sqlite+aiosqlite:///<app_data>/chess_review.db`).
+`config.py` uses `pydantic-settings` with `CHESS_REVIEW_` env prefix and `.env`. Defaults are tuned for the desktop case: `sf_workers=0` (auto = `cores - 2`, leaving 2 cores free for the user, min 1), `sf_hash_mb=0` (auto), `port=18765`, no DB URL (falls back to `sqlite+aiosqlite:///<app_data>/chess_review.db`).
 
 ## Commands
 

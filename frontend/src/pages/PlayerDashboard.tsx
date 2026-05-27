@@ -85,9 +85,6 @@ export default function PlayerDashboard() {
           <h1 className="text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
             {player.username}
           </h1>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            {player.provider} &middot; {totalGames} games
-          </p>
         </div>
         <button
           onClick={() => reimportMutation.mutate()}
