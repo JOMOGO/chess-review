@@ -9,7 +9,12 @@ export default function ImportToast() {
   const [visible, setVisible] = useState(isToastVisible)
   const queryClient = useQueryClient()
   const prevPositions = useRef(0)
-  const prevTime = useRef(Date.now())
+  const prevTime = useRef(0)
+  // Tracks which job the baseline above belongs to. When stored.jobId
+  // changes, the speed-calc effect notices and re-anchors the baseline
+  // to "now" so the first measurement of a new job isn't computed
+  // against the previous job's time window.
+  const trackedJobId = useRef<string | null>(null)
 
   useEffect(() => onImportChanged(() => {
     setStored(getStoredImport())
@@ -53,11 +58,22 @@ export default function ImportToast() {
     }
   }, [isDone])
 
-  // Calculate speed (positions/sec)
+  // Calculate speed (positions/sec). Single effect handles both
+  // "anchor baseline on a new job" and "compute delta on each tick" so we
+  // never accidentally measure against the wrong job's window — that bug
+  // showed up as ~0.2 pos/s when the app had been open for a long time
+  // before the import was kicked off.
   const [speed, setSpeed] = useState(0)
   useEffect(() => {
     if (!status || !status.analyzed_positions) return
     const now = Date.now()
+    const jobId = stored?.jobId ?? null
+    if (trackedJobId.current !== jobId) {
+      trackedJobId.current = jobId
+      prevTime.current = now
+      prevPositions.current = status.analyzed_positions
+      return
+    }
     const dt = (now - prevTime.current) / 1000
     const dp = status.analyzed_positions - prevPositions.current
     if (dt > 0 && dp > 0) {
@@ -65,7 +81,7 @@ export default function ImportToast() {
     }
     prevPositions.current = status.analyzed_positions
     prevTime.current = now
-  }, [status?.analyzed_positions])
+  }, [status?.analyzed_positions, stored?.jobId])
 
   const importing = status && status.total_games > 0 && status.imported_games < status.total_games
   const analyzing = status && status.analyzed_positions > 0 || (status && status.analyzed_games > 0)
@@ -139,15 +155,28 @@ export default function ImportToast() {
             done={!importing}
           />
 
-          {/* Step 2: Stockfish analysis (runs concurrently) */}
+          {/* Step 2: Stockfish analysis (runs concurrently).
+              Once every imported game has entered analysis, switch to a
+              "Finalizing..." label — analyzed_games + 1 would otherwise
+              read "Game N+1 / N" which is nonsense, and the last in-flight
+              tasks can take a minute to drain after the counter saturates.
+            */}
           <StepBlock
             icon="♛"
             title="Stockfish analysis"
-            subtitle={
-              status!.analyzed_games > 0 || status!.analyzed_positions > 0
-                ? `Game ${status!.analyzed_games + 1}${status!.imported_games > 0 ? ' / ' + status!.imported_games : ''}${speed > 0 ? ` · ${speed} pos/s` : ''}`
-                : importing ? 'Starting soon...' : 'Starting...'
-            }
+            subtitle={(() => {
+              const speedSuffix = speed > 0 ? ` · ${speed} pos/s` : ''
+              const finished =
+                status!.imported_games > 0
+                && status!.analyzed_games >= status!.imported_games
+              if (finished) return `Finalizing${speedSuffix}`
+              if (status!.analyzed_games > 0 || status!.analyzed_positions > 0) {
+                const slash = status!.imported_games > 0
+                  ? ' / ' + status!.imported_games : ''
+                return `Game ${status!.analyzed_games + 1}${slash}${speedSuffix}`
+              }
+              return importing ? 'Starting soon...' : 'Starting...'
+            })()}
             current={status!.analyzed_positions}
             total={status!.total_positions || 0}
             active={!isDone}
