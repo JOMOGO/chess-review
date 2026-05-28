@@ -13,13 +13,16 @@ async def get_endgame_summary(
     session: AsyncSession,
     player_id: uuid.UUID,
     since: datetime | None = None,
-    min_reached: int = 2,
+    min_reached: int = 1,
 ) -> list[dict]:
     """Per-bucket counts: reached vs. converted.
 
-    Buckets with fewer than ``min_reached`` occurrences are excluded — a 1/1
-    "100% conversion" of some exotic material balance is noise, not a
-    statistic. The frontend can pass ``min_reached=1`` to override.
+    Default ``min_reached=1`` so a new user with diverse endgames sees every
+    bucket they reached. With ``min_reached=2`` (the old default) early
+    accounts often had zero rows because every bucket was a 1/1 — and the
+    page just showed "no data" despite real games being detected. Raise
+    the threshold once your data is fat enough that single-occurrence
+    buckets feel like noise.
     """
     filters = [
         Game.player_id == player_id,

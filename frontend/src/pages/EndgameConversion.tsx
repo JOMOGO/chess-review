@@ -41,7 +41,7 @@ export default function EndgameConversion() {
 
   const summaryQuery = useQuery({
     queryKey: ['endgames', id, range],
-    queryFn: () => getEndgames(id!, 2, range),
+    queryFn: () => getEndgames(id!, 1, range),
     enabled: !!id,
   })
 
