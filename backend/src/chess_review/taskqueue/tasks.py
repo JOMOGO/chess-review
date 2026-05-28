@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid as uuid_mod
 from datetime import datetime, timezone
+from typing import Any, AsyncIterator
 
 import chess
 from sqlalchemy import select
@@ -226,11 +227,55 @@ async def _import_games(
         async with async_session() as session:
             logger.info("Fetching games for %s", username)
 
+            # Pre-fetch the archive list (one fast call) so we can seed a
+            # game-count estimate. Without an estimate, total_games grows
+            # in lockstep with imported_games during streaming and the
+            # progress bar shows 100% the whole time. Estimate is refined
+            # after each archive lands and is always >= actual imported so
+            # the displayed ratio stays meaningful.
+            archives = list(reversed(await client.get_archives(username)))
+            total_archives = len(archives)
+            logger.info(
+                "Found %d archives for %s (newest first)", total_archives, username,
+            )
+            # Initial guess until we see a real archive size. 30 games/month is
+            # roughly what an active chess.com player accumulates; the real
+            # average lands within ~1 archive's worth of fetches.
+            INITIAL_PER_ARCHIVE = 30
+            estimated_total = max(1, total_archives * INITIAL_PER_ARCHIVE)
+            job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
+            job.total_games = estimated_total
+            progress.total_items = estimated_total
+            await session.commit()
+
             BATCH = 25
             games_since_stats = 0
             casing_synced = False
 
-            async for raw in client.stream_all_games(username):
+            async def _emit_games() -> AsyncIterator[dict[str, Any]]:
+                """Yield games archive-by-archive, refining the total
+                estimate after each archive lands.
+                """
+                for archive_idx, url in enumerate(archives):
+                    monthly = await client.get_monthly_games(url)
+                    archives_done = archive_idx + 1
+                    logger.info(
+                        "Archive %d/%d: %d games",
+                        archives_done, total_archives, len(monthly),
+                    )
+                    for game in reversed(monthly):
+                        yield game
+                    # Refine the estimate using observed average so far.
+                    # Total = imported + estimated remaining; never < imported.
+                    if stats.total_games > 0 and archives_done < total_archives:
+                        avg = stats.total_games / archives_done
+                        nonlocal estimated_total
+                        estimated_total = int(
+                            stats.total_games
+                            + (total_archives - archives_done) * avg
+                        )
+
+            async for raw in _emit_games():
                 stats.total_games += 1
                 parsed = parse_chesscom_game(raw, username)
                 if parsed is None:
@@ -359,10 +404,11 @@ async def _import_games(
                 if games_since_stats >= BATCH:
                     job = (await session.execute(select(ImportJob).where(ImportJob.id == jid))).scalar_one()
                     job.imported_games = stats.imported
-                    # total_games grows as archives stream in — flush it so
-                    # the frontend's progress bar tracks the actual count.
-                    job.total_games = stats.total_games
-                    progress.total_items = stats.total_games
+                    # Write the estimate (always >= imported during streaming;
+                    # collapses to the real count on the final commit below).
+                    total_for_display = max(estimated_total, stats.total_games)
+                    job.total_games = total_for_display
+                    progress.total_items = total_for_display
                     job.total_positions = stats.imported_positions
                     player_obj = (await session.execute(select(Player).where(Player.id == pid))).scalar_one()
                     player_obj.total_games_imported = stats.imported

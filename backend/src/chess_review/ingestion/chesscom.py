@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -45,24 +45,3 @@ class ChessComClient:
             logger.exception("Failed to fetch archive %s", archive_url)
             return []
 
-    async def stream_all_games(self, username: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield games newest-month-first as each monthly archive arrives.
-
-        Compared to building one big list, streaming lets the consumer start
-        ingesting + analyzing games as soon as the first archive returns
-        (~0.5s) rather than waiting for the full walk (~0.25s * months).
-
-        Order is "newest-month-first, within-archive newest-first" — not
-        strictly globally newest-first (a late-March game can show up after
-        an early-April game), but the boundary case is rare and not worth
-        materializing the whole list to fix.
-        """
-        archives = list(reversed(await self.get_archives(username)))
-        logger.info("Found %d archives for %s (newest first)", len(archives), username)
-        for i, url in enumerate(archives):
-            games = await self.get_monthly_games(url)
-            logger.info("Archive %d/%d: %d games", i + 1, len(archives), len(games))
-            # chess.com returns each month oldest-first; reverse so within a
-            # month the most recent game is yielded first.
-            for game in reversed(games):
-                yield game
