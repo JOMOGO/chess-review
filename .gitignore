@@ -15,19 +15,14 @@ build.log
 /frontend/build.log
 
 # ============================================================================
-# Runtime data (per-user, dev-mode only)
+# Stale runtime data (defensive — no longer written by current code)
 # ============================================================================
-# In dev mode the app writes the SQLite DB, log, downloaded Stockfish, and
-# WebView2 profile into <repo>/data/. In the frozen exe it writes to
-# %LOCALAPPDATA%/ChessReview/ instead — that directory is outside the repo.
+# Earlier versions wrote dev-mode app data into <repo>/data/ and looked for
+# a bundled Stockfish at <repo>/stockfish/. Both code paths are gone: dev
+# and packaged .exe now share %LOCALAPPDATA%/ChessReview/, and Stockfish is
+# auto-downloaded by sf_download.py. Keeping these entries so a stray
+# folder doesn't get committed by accident.
 /data/
-
-# ============================================================================
-# Engine binaries
-# ============================================================================
-# Stockfish is auto-downloaded into %LOCALAPPDATA%/ChessReview/engine/ on
-# first launch of the frozen exe (see backend/src/chess_review/engine/
-# sf_download.py). We don't ship one in the repo.
 /stockfish/
 
 # ============================================================================

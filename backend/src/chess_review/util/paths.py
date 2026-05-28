@@ -21,14 +21,14 @@ def get_base_dir() -> Path:
 def get_app_data_dir() -> Path:
     """Return the persistent app data directory.
 
-    Windows: %LOCALAPPDATA%/ChessReview
-    Dev mode: <repo>/data
+    Always ``%LOCALAPPDATA%/ChessReview`` (or ``~/AppData/Local/ChessReview``
+    if ``LOCALAPPDATA`` is unset). Dev mode (``uvicorn`` un-frozen) and the
+    packaged ``.exe`` share the same directory by design — switching between
+    them should not change which database, log, or downloaded engine you're
+    looking at.
     """
-    if getattr(sys, "frozen", False):
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        d = base / _APP_NAME
-    else:
-        d = get_base_dir() / "data"
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    d = base / _APP_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -52,21 +52,11 @@ def _find_stockfish_in(dir_: Path) -> Path | None:
 def get_stockfish_path() -> Path:
     """Locate the Stockfish binary.
 
-    Lookup order:
-      1. ``<exe-dir>/stockfish/`` — the binary shipped next to the .exe by
-         ``build.py``. Avoids re-downloading on first run.
-      2. ``%LOCALAPPDATA%/ChessReview/engine/`` — where the auto-downloader
-         caches a CPU-tier-matched build.
-
-    If neither has a binary yet, returns the auto-download target path so the
-    downloader knows where to put it.
+    Only looks at ``%LOCALAPPDATA%/ChessReview/engine/`` — where the auto
+    downloader caches a CPU-tier-matched build on first launch. If nothing
+    is cached yet, returns the target path so the downloader knows where
+    to put it.
     """
-    if getattr(sys, "frozen", False):
-        bundled = Path(sys.executable).parent / "stockfish"
-        found = _find_stockfish_in(bundled)
-        if found is not None:
-            return found
-
     sf_dir = get_stockfish_dir()
     found = _find_stockfish_in(sf_dir)
     if found is not None:

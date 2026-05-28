@@ -30,14 +30,10 @@ def _sf_dir() -> Path:
 
 
 def _find_existing() -> Path | None:
-    """Return existing Stockfish exe if one is already present.
-
-    Checks the bundled location (next to the .exe, populated by ``build.py``)
-    first via :func:`get_stockfish_path`, then the auto-download cache.
-    """
-    bundled = get_stockfish_path()
-    if bundled.exists() and bundled.is_file():
-        return bundled
+    """Return an existing Stockfish exe in the app's engine cache, if any."""
+    target = get_stockfish_path()
+    if target.exists() and target.is_file():
+        return target
     sf_dir = _sf_dir()
     for f in sf_dir.iterdir():
         if f.name.startswith("stockfish") and f.suffix == ".exe":

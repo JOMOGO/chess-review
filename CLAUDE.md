@@ -29,7 +29,7 @@ The original brief for this project described a Docker/Postgres/Redis/ARQ web se
   5. Mounts `frontend/dist` as static + SPA fallback so any non-`/api/...` path serves `index.html`.
 
 ### Data paths (`util/paths.py`)
-PyInstaller-aware. In a frozen exe, app data lives in `%LOCALAPPDATA%/ChessReview/` (DB, log, downloaded Stockfish). In dev, it lives in `<repo>/data/`. Static frontend is `sys._MEIPASS/static` when frozen, `<repo>/frontend/dist` in dev.
+PyInstaller-aware. App data **always** lives in `%LOCALAPPDATA%/ChessReview/` (DB, log, downloaded Stockfish, WebView2 profile) — dev mode and the packaged `.exe` deliberately share it so they look at the same data. Static frontend is `sys._MEIPASS/static` when frozen, `<repo>/frontend/dist` in dev.
 
 ### Analysis pipeline (the core of the product)
 `taskqueue/tasks.py::import_and_analyze` runs import and analysis **concurrently** via `asyncio.gather`:
@@ -89,7 +89,8 @@ npm run lint     # eslint .
 
 ### Building the distributable `.exe`
 ```powershell
-# Builds frontend, runs PyInstaller against chess_review.spec, copies Stockfish next to the exe
+# Builds frontend, runs PyInstaller against chess_review.spec.
+# Stockfish is auto-downloaded into %LOCALAPPDATA%/ChessReview/engine/ on first launch.
 python build.py
 # Output: dist/chess-review.exe
 ```

@@ -33,17 +33,10 @@ def main() -> None:
         str(ROOT / "chess_review.spec"),
     ], cwd=ROOT)
 
-    # 3. Copy stockfish alongside
-    sf_src = ROOT / "stockfish" / "stockfish-windows-x86-64-bmi2.exe"
-    sf_dst = ROOT / "dist" / "stockfish"
-    sf_dst.mkdir(parents=True, exist_ok=True)
-    if sf_src.exists():
-        import shutil
-        shutil.copy2(sf_src, sf_dst / sf_src.name)
-        print(f"Copied Stockfish to {sf_dst}")
-    else:
-        print(f"WARNING: Stockfish binary not found at {sf_src}")
-        print("  Place it there before distributing.")
+    # Stockfish is auto-downloaded by sf_download.py on first launch into
+    # %LOCALAPPDATA%/ChessReview/engine/ (CPU-tier-matched build, ~30 MB).
+    # We don't bundle it — that kept the repo / .exe ~80 MB lighter and
+    # avoided the source-vs-output stockfish/ folder duplication.
 
     print("\n=== Build complete ===")
     print(f"Distribution at: {ROOT / 'dist'}")
