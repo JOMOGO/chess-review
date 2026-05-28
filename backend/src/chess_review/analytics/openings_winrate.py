@@ -42,6 +42,7 @@ async def get_opening_stats(
             func.sum(case((Game.user_result == "win", 1), else_=0)).label("wins"),
             func.sum(case((Game.user_result == "draw", 1), else_=0)).label("draws"),
             func.sum(case((Game.user_result == "loss", 1), else_=0)).label("losses"),
+            func.max(Game.played_at).label("last_played_at"),
         )
         .where(and_(*filters))
         .group_by(Game.eco, Game.opening_name, Game.user_color)
@@ -73,6 +74,9 @@ async def get_opening_stats(
 
         results.append({
             "eco": r.eco,
+            # ECO codes are 1 letter + 2 digits (e.g. B20). The leading letter
+            # groups openings into the five canonical families (A/B/C/D/E).
+            "parent_eco": r.eco[0] if r.eco else None,
             "opening_name": r.opening_name,
             "color": r.user_color,
             "games": n,
@@ -80,7 +84,10 @@ async def get_opening_stats(
             "draws": r.draws,
             "losses": r.losses,
             "win_rate": round(r.wins / n, 3),
+            # Chess-standard performance score: win=1, draw=0.5, loss=0.
+            "score_rate": round((r.wins + 0.5 * r.draws) / n, 3),
             "avg_cpl": round(float(cpl_row or 0), 1),
+            "last_played_at": r.last_played_at.isoformat() if r.last_played_at else None,
         })
 
     return results

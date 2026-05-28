@@ -11,6 +11,7 @@ import {
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
+import { colorIcon } from '../lib/format'
 
 function bucketLabel(bucket: string): string {
   // KRPvKR -> "K+R+P vs K+R" for readability
@@ -217,7 +218,7 @@ export default function EndgameConversion() {
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-3">
                           <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                            {ex.user_color === 'white' ? '♔' : '♚'} ply {ex.entry_ply}
+                            {colorIcon(ex.user_color)} ply {ex.entry_ply}
                           </span>
                           <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                             +{(ex.user_cp_at_entry / 100).toFixed(1)} at entry

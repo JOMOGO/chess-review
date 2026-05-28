@@ -13,6 +13,8 @@ import TimeRangeFilter from '../components/TimeRangeFilter'
 import { rangeToPlayedFrom } from '../lib/timeRange'
 import InfoTip from '../components/InfoTip'
 import { CPL_EXPLANATION } from '../lib/explanations'
+import { colorIcon, resultIcon } from '../lib/format'
+import QueryError from '../components/QueryError'
 
 export default function RatingPerformance() {
   const { id } = useParams<{ id: string }>()
@@ -28,6 +30,8 @@ export default function RatingPerformance() {
   const data = query.data ?? []
 
   if (query.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+  if (query.isError) return <QueryError error={query.error} />
+
 
   const chartData = data.map((d) => ({
     bucket: d.bucket,
@@ -196,7 +200,7 @@ function BucketGames({
             style={{ color: 'var(--text-secondary)' }}
           >
             <span>
-              {g.user_color === 'white' ? '♔' : '♚'} vs{' '}
+              {colorIcon(g.user_color)} vs{' '}
               {g.user_color === 'white' ? g.black_username : g.white_username}
               {oppRating ? ` (${oppRating})` : ''}
             </span>
@@ -216,7 +220,7 @@ function BucketGames({
                   g.user_result === 'draw' ? { color: 'var(--text-muted)' } : undefined
                 }
               >
-                {g.user_result === 'win' ? '✓' : g.user_result === 'loss' ? '✕' : '½'}
+                {resultIcon(g.user_result)}
               </span>
             </span>
           </Link>

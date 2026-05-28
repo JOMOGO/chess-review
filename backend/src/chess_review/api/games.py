@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from chess_review.db import get_session
-from chess_review.models import Game, GameMove
+from chess_review.models import Game, GameMove, PositionEval
 
 router = APIRouter(tags=["games"])
 
@@ -208,8 +208,37 @@ async def get_game(
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
+    # Pull the engine's recommended move for every position in the game so the
+    # frontend can draw a Lichess-style "best move" arrow without re-running
+    # the engine. We take the deepest PositionEval per position.
+    position_ids = {m.position_before_id for m in game.moves}
+    best_by_pos: dict[uuid.UUID, str] = {}
+    if position_ids:
+        max_depth_sq = (
+            select(
+                PositionEval.position_id.label("pid"),
+                func.max(PositionEval.depth).label("max_depth"),
+            )
+            .where(PositionEval.position_id.in_(position_ids))
+            .group_by(PositionEval.position_id)
+            .subquery()
+        )
+        eval_stmt = select(
+            PositionEval.position_id, PositionEval.best_move_uci
+        ).join(
+            max_depth_sq,
+            and_(
+                PositionEval.position_id == max_depth_sq.c.pid,
+                PositionEval.depth == max_depth_sq.c.max_depth,
+            ),
+        )
+        for pid, best in (await session.execute(eval_stmt)).all():
+            if best:
+                best_by_pos[pid] = best
+
     moves_out = []
     for m in game.moves:
+        best_uci = best_by_pos.get(m.position_before_id)
         moves_out.append({
             "ply": m.ply,
             "san": m.san,
@@ -223,6 +252,7 @@ async def get_game(
             "classification": m.classification,
             "phase": m.phase,
             "is_user_move": m.is_user_move,
+            "best_move_uci": best_uci or None,
         })
 
     return {

@@ -8,6 +8,7 @@ import {
   type TimeRange,
 } from '../api/client'
 import { setStoredPlayer, setStoredImport, getStoredImport } from '../lib/storage'
+import { colorIcon, resultIcon, resultLabel } from '../lib/format'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
 import { CPL_EXPLANATION } from '../lib/explanations'
@@ -42,7 +43,10 @@ export default function PlayerDashboard() {
     enabled: !!id,
   })
 
-  const reimportMutation = useMutation({
+  // "Force import" walks the chess.com archives and pulls in any game that
+  // isn't already in the local DB. Existing games are left alone (see the
+  // duplicate check in backend taskqueue/tasks.py::_import_games).
+  const forceImportMutation = useMutation({
     mutationFn: async () => {
       const { job_id } = await startImport(id!)
       setStoredImport({ playerId: id!, jobId: job_id })
@@ -87,8 +91,9 @@ export default function PlayerDashboard() {
           </h1>
         </div>
         <button
-          onClick={() => reimportMutation.mutate()}
-          disabled={reimportMutation.isPending || activeImportRunning}
+          onClick={() => forceImportMutation.mutate()}
+          disabled={forceImportMutation.isPending || activeImportRunning}
+          title="Download any games on chess.com that aren't already in your local database. Existing games are left untouched."
           className="px-4 py-2 border rounded-lg text-sm
                      hover:border-indigo-500 disabled:opacity-40 transition-colors"
           style={{
@@ -97,7 +102,7 @@ export default function PlayerDashboard() {
             color: 'var(--text-secondary)',
           }}
         >
-          ↻ Re-import
+          ↓ Force import
         </button>
       </div>
 
@@ -179,7 +184,7 @@ export default function PlayerDashboard() {
       <div className="grid grid-cols-3 gap-3 mb-8">
         <NavCard to={`/players/${id}/games`} Icon={List} label="Games" desc={`${totalGames} games`} />
         <NavCard to={`/players/${id}/accuracy`} Icon={Target} label="Accuracy" desc="Trend over time" />
-        <NavCard to={`/players/${id}/opening-stats`} Icon={BookOpen} label="Openings" desc="Win rates & leaks" />
+        <NavCard to={`/players/${id}/openings`} Icon={BookOpen} label="Openings" desc="Win rates & move tree" />
         <NavCard to={`/players/${id}/phases`} Icon={Hourglass} label="Phases" desc="Opening / Middle / End" />
         <NavCard to={`/players/${id}/time`} Icon={Clock} label="Time Pressure" desc="CPL vs clock" />
         <NavCard to={`/players/${id}/ratings`} Icon={Trophy} label="By Rating" desc="vs opponent strength" />
@@ -208,7 +213,7 @@ export default function PlayerDashboard() {
               >
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
-                    <span>{g.user_color === 'white' ? '♔' : '♚'}</span>
+                    <span>{colorIcon(g.user_color)}</span>
                     <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
                       {g.white_username} vs {g.black_username}
                     </span>
@@ -222,7 +227,7 @@ export default function PlayerDashboard() {
                           : 'text-gray-400'
                     }`}
                   >
-                    {g.user_result === 'win' ? '✓ Win' : g.user_result === 'loss' ? '✕ Loss' : '½ Draw'}
+                    {resultIcon(g.user_result)} {resultLabel(g.user_result)}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs mt-1 ml-6" style={{ color: 'var(--text-muted)' }}>

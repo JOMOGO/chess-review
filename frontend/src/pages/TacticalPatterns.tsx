@@ -11,6 +11,7 @@ import {
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
+import { resultIcon } from '../lib/format'
 
 const MOTIF_LABEL: Record<string, string> = {
   fork: 'Forks',
@@ -231,7 +232,7 @@ export default function TacticalPatterns() {
                                 : 'text-gray-400'
                           }`}
                         >
-                          {ex.user_result === 'win' ? '✓' : ex.user_result === 'loss' ? '✕' : '½'}
+                          {resultIcon(ex.user_result)}
                         </span>
                       </div>
                       <div className="flex justify-between text-xs mt-1" style={{ color: 'var(--text-muted)' }}>

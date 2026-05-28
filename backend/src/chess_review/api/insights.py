@@ -53,11 +53,13 @@ async def opening_tree(
     min_visits: int = 5,
     max_ply: int = 24,
     range: str | None = None,
+    color: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     nodes = await build_opening_tree(
         session, player_id, max_ply, min_visits,
         since=_resolve_since(range, None),
+        color=color,
     )
     return {"nodes": nodes}
 

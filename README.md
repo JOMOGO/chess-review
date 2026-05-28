@@ -6,11 +6,12 @@ across all your games — not just one-off blunders.
 
 ## What it shows you
 
-- **Per-game review** with eval bars, best-move arrows, and move classification (best / good / inaccuracy / mistake / blunder).
-- **Opening leak detection** — positions you reach often and play poorly.
+- **Per-game review** with a Lichess-style eval bar, best-move arrow (sourced from the cached engine line, no extra calls), bottom eval chart with phase bands and blunder/mistake dots, and move classification (best / good / inaccuracy / mistake / blunder / miss).
+- **Unified Openings page** with two views of the same data: a *Win Rates* list grouped by ECO family or name prefix (collapsible) and a *Move Tree* showing your moves stacked by shared lines. Win rate uses the chess-standard score = (W + 0.5·D) / N.
+- **Move Tree** with per-position W-D-L bars, score%, and a colour filter so you can view your repertoire one colour at a time.
 - **Phase performance** — opening vs. middlegame vs. endgame CPL.
 - **Time-pressure curve** — accuracy as a function of clock remaining.
-- **Accuracy trend** over time and **rating performance** by opening.
+- **Accuracy trend** over time, **rating performance** by opponent rating bucket, **tactical motif** classifier for missed forks/pins/skewers, and **endgame conversion** stats.
 
 ## How it works
 

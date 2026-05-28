@@ -5,11 +5,11 @@ import { Chessboard } from 'react-chessboard'
 import { Chess } from 'chess.js'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
+  ReferenceArea, ReferenceDot,
 } from 'recharts'
 import { getGame } from '../api/client'
 import BackButton from '../components/BackButton'
 import InfoTip from '../components/InfoTip'
-import { CPL_EXPLANATION } from '../lib/explanations'
 
 const CLASS_COLORS: Record<string, string> = {
   best: '#22c55e',
@@ -29,6 +29,12 @@ const CLASS_ICONS: Record<string, string> = {
   blunder: '??',
   brilliant: '!!',
   miss: '⨯',
+}
+
+const PHASE_COLORS: Record<string, string> = {
+  opening: '#3b82f6',
+  middlegame: '#a855f7',
+  endgame: '#22c55e',
 }
 
 const CLASS_DESCRIPTIONS: Record<string, string> = {
@@ -88,10 +94,48 @@ export default function GameReview() {
 
   const evalData = useMemo(() => {
     if (!game) return []
-    return game.moves.map((m, i) => ({
-      ply: i + 1,
-      eval: m.eval_after_cp != null ? Math.max(-5, Math.min(5, m.eval_after_cp / 100)) : null,
-    }))
+    return game.moves.map((m, i) => {
+      const ev = m.eval_after_cp != null ? Math.max(-5, Math.min(5, m.eval_after_cp / 100)) : null
+      return { ply: i + 1, eval: ev }
+    })
+  }, [game])
+
+  // Phase bands for the chart background. Group consecutive plies sharing a
+  // phase so each band is one <ReferenceArea> rather than per-ply slivers.
+  const phaseBands = useMemo(() => {
+    if (!game) return []
+    const bands: { from: number; to: number; phase: string }[] = []
+    let current: { from: number; to: number; phase: string } | null = null
+    game.moves.forEach((m, i) => {
+      const ply = i + 1
+      if (!m.phase) return
+      if (current && current.phase === m.phase) {
+        current.to = ply
+      } else {
+        if (current) bands.push(current)
+        current = { from: ply, to: ply, phase: m.phase }
+      }
+    })
+    if (current) bands.push(current)
+    return bands
+  }, [game])
+
+  // User moves classified as a real error (or a "miss") get a colored dot on
+  // the chart so the user can spot their critical moments at a glance.
+  const errorDots = useMemo(() => {
+    if (!game) return []
+    return game.moves
+      .map((m, i) => ({ m, ply: i + 1 }))
+      .filter(({ m }) =>
+        m.is_user_move &&
+        m.classification != null &&
+        ['blunder', 'mistake', 'miss', 'inaccuracy'].includes(m.classification),
+      )
+      .map(({ m, ply }) => ({
+        ply,
+        eval: m.eval_after_cp != null ? Math.max(-5, Math.min(5, m.eval_after_cp / 100)) : 0,
+        classification: m.classification as string,
+      }))
   }, [game])
 
   const accuracy = useMemo(() => {
@@ -146,106 +190,245 @@ export default function GameReview() {
     return counts
   }, [game])
 
+  // The board's parent gives us an aspect-square slot whose pixel dimensions
+  // can be non-integer (e.g. 580.5px tall after the row's height is
+  // distributed). react-chessboard renders 8 squares as `grid-template-columns:
+  // repeat(8, 1fr)` — when the parent isn't a multiple of 8, the rows round
+  // inconsistently and you get hairline white gaps. Solution: measure the
+  // available square and snap to floor(dim / 8) * 8.
+  //
+  // Using a callback ref via useState so the effect re-runs the moment the
+  // slot actually mounts. A plain useRef with `[]`-dep useEffect would miss
+  // this — on first render `query.isLoading` returns early and the slot div
+  // is never rendered, so the ref stays null and the observer never attaches.
+  const [boardSlot, setBoardSlot] = useState<HTMLDivElement | null>(null)
+  const [boardSize, setBoardSize] = useState(0)
+  useEffect(() => {
+    if (!boardSlot) return
+    const recompute = () => {
+      const w = boardSlot.clientWidth
+      const h = boardSlot.clientHeight
+      // 920 matches the slot's max-w-[920px] cap; the 600 we had here was
+      // an old leftover that was silently clamping the board well below
+      // what the column could actually give it.
+      const dim = Math.min(w, h, 920)
+      setBoardSize(Math.max(64, Math.floor(dim / 8) * 8))
+    }
+    recompute()
+    const ro = new ResizeObserver(recompute)
+    ro.observe(boardSlot)
+    return () => ro.disconnect()
+  }, [boardSlot])
+
   if (query.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
   if (!game) return <p className="text-red-400">Game not found</p>
 
   const currentFen = positions[currentPly] || 'start'
-  const boardOrientation = game.user_color === 'black' ? 'black' : 'white'
+  const userIsWhite = game.user_color === 'white'
+  const boardOrientation: 'white' | 'black' = userIsWhite ? 'white' : 'black'
   const currentMove = currentPly > 0 ? game.moves[currentPly - 1] : null
-  const evalPct = currentMove?.eval_after_cp != null
-    ? Math.max(5, Math.min(95, 50 + currentMove.eval_after_cp / 20))
-    : 50
+
+  // Best move for the *current* position to move from. moves[currentPly] is
+  // the next move in the game, whose position_before is what's on the board.
+  const nextMove = currentPly < game.moves.length ? game.moves[currentPly] : null
+  const bestUci = nextMove?.best_move_uci ?? null
+  const bestArrow = bestUci && bestUci.length >= 4
+    ? [{ startSquare: bestUci.slice(0, 2), endSquare: bestUci.slice(2, 4), color: 'rgba(34, 197, 94, 0.75)' }]
+    : []
+  let bestSan: string | null = null
+  if (bestUci && bestUci.length >= 4) {
+    try {
+      const c = new Chess(currentFen)
+      const move = c.move({
+        from: bestUci.slice(0, 2),
+        to: bestUci.slice(2, 4),
+        promotion: bestUci.length > 4 ? bestUci.slice(4) : undefined,
+      })
+      bestSan = move?.san ?? null
+    } catch {
+      bestSan = null
+    }
+  }
+  const playedMatchesBest = bestUci != null && nextMove != null && nextMove.uci === bestUci
+
+  // Who's to move at the displayed position, and whether the game is over here.
+  const gameOver = currentPly === game.moves.length
+  const whiteToMove = currentPly % 2 === 0
+  const topPlayer = userIsWhite
+    ? { name: game.black_username, rating: game.black_rating, color: 'black' as const, isUser: false }
+    : { name: game.white_username, rating: game.white_rating, color: 'white' as const, isUser: false }
+  const bottomPlayer = userIsWhite
+    ? { name: game.white_username, rating: game.white_rating, color: 'white' as const, isUser: true }
+    : { name: game.black_username, rating: game.black_rating, color: 'black' as const, isUser: true }
+  const topToMove = !gameOver && ((topPlayer.color === 'white') === whiteToMove)
+  const bottomToMove = !gameOver && ((bottomPlayer.color === 'white') === whiteToMove)
 
   return (
     <div>
       <BackButton to={backTo} label="Back" />
 
-      {/* Game header */}
-      <div className="bg-[#16162a] border border-gray-700 rounded-lg p-4 mb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="text-center">
-              <div className="text-white font-semibold">{game.white_username}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{game.white_rating || '?'}</div>
-            </div>
-            <div className="text-lg font-bold" style={{ color: 'var(--text-muted)' }}>vs</div>
-            <div className="text-center">
-              <div className="text-white font-semibold">{game.black_username}</div>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{game.black_rating || '?'}</div>
-            </div>
-            <span className={`ml-2 px-2 py-0.5 rounded text-sm font-medium ${
-              game.user_result === 'win' ? 'bg-green-900/50 text-green-400'
-              : game.user_result === 'loss' ? 'bg-red-900/50 text-red-400'
-              : 'bg-gray-700/50 text-gray-400'
-            }`}>
-              {game.result}
-            </span>
-          </div>
-          <div className="text-right text-sm" style={{ color: 'var(--text-secondary)' }}>
-            <div>{game.opening_name || game.eco || 'Unknown opening'}</div>
-            <div>{game.time_class} {game.time_control} &middot; {new Date(game.played_at).toLocaleDateString()}</div>
-          </div>
+      {/* Game meta header — kept compact so the grid row below it claims more
+          of the viewport (player names live in the right-column strips). */}
+      <div className="bg-[#16162a] border border-gray-700 rounded-lg px-3 py-1.5 mb-2 flex items-center justify-between text-sm">
+        <div className="flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+          <span>{game.opening_name || game.eco || 'Unknown opening'}</span>
+          <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
+          <span>{game.time_class} {game.time_control}</span>
+          <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
+          <span>{new Date(game.played_at).toLocaleDateString()}</span>
         </div>
+        <span className={`px-2 py-0.5 rounded text-sm font-medium ${
+          game.user_result === 'win' ? 'bg-green-900/50 text-green-400'
+          : game.user_result === 'loss' ? 'bg-red-900/50 text-red-400'
+          : 'bg-gray-700/50 text-gray-400'
+        }`}>
+          {game.result} &middot; {game.user_result === 'win' ? 'You won' : game.user_result === 'loss' ? 'You lost' : 'Draw'}
+        </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
-        {/* Left: board + eval graph */}
-        <div>
-          <div className="flex gap-1">
-            {/* Eval bar */}
-            <div className="w-5 rounded overflow-hidden relative flex-shrink-0" style={{ background: '#333' }}>
-              <div className="absolute bottom-0 left-0 right-0 bg-white transition-all duration-300"
-                style={{ height: `${evalPct}%` }} />
-            </div>
+      {/*
+        Cap the grid row's height so the right column's move list can't push
+        the layout past the chart's bottom. Both columns inherit this height
+        via the default `align-items: stretch`, which lets the right column's
+        `flex-1 min-h-0` move list grab exactly the remaining space under
+        the cards. Board uses max-h-full so aspect-square scales down if the
+        viewport is shorter than the natural ~820px layout.
+      */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 lg:h-[calc(100vh-180px)]">
+        {/* Left: board + nav + eval graph. Player strips moved to the right
+            column so the board can claim the full vertical space here. */}
+        <div className="flex flex-col min-h-0">
+          <div className="flex gap-1 flex-1 min-h-0 justify-start">
+            <EvalBar cp={currentMove?.eval_after_cp ?? null} flipped={boardOrientation === 'black'} />
 
-            {/* Board */}
-            <div className="flex-1 aspect-square max-w-[600px]">
-              <Chessboard options={{
-                position: currentFen,
-                boardOrientation: boardOrientation,
-                allowDragging: false,
-              }} />
+            {/* Board slot: outer ref measures the available square; inner div
+                is sized to the nearest multiple of 8 pixels so the
+                chessboard's 1fr×8 grid never falls on a sub-pixel boundary
+                (which produces white hairline gaps between squares).
+                `justify-start` sits the board flush against the eval bar
+                instead of centering it — eliminates the wasted gap on the
+                left. The remaining horizontal slack ends up on the right. */}
+            <div
+              ref={setBoardSlot}
+              className="flex-1 max-w-[920px] flex items-center justify-start"
+              style={{ height: '100%', minHeight: 0 }}
+            >
+              {boardSize > 0 && (
+                <div style={{ width: boardSize, height: boardSize }}>
+                  <Chessboard options={{
+                    position: currentFen,
+                    boardOrientation: boardOrientation,
+                    allowDragging: false,
+                    arrows: bestArrow,
+                  }} />
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Navigation */}
-          <div className="flex items-center justify-center gap-2 mt-3">
-            <NavBtn onClick={() => setCurrentPly(0)} label="⟨⟨" />
-            <NavBtn onClick={() => setCurrentPly(Math.max(0, currentPly - 1))} label="⟨" />
-            <span className="text-sm px-3 font-mono" style={{ color: 'var(--text-secondary)' }}>
+          {/* Navigation buttons */}
+          <div className="flex items-center justify-center gap-1.5 mt-1">
+            <NavBtn onClick={() => setCurrentPly(0)} label="⟨⟨" title="Jump to start" />
+            <NavBtn onClick={() => setCurrentPly(Math.max(0, currentPly - 1))} label="⟨" title="Previous move (←)" />
+            <span className="text-xs px-2 font-mono min-w-[64px] text-center" style={{ color: 'var(--text-secondary)' }}>
               {currentPly > 0 ? `${Math.ceil(currentPly / 2)}.${currentPly % 2 === 1 ? '..' : ''}` : 'Start'}
             </span>
-            <NavBtn onClick={() => setCurrentPly(Math.min(positions.length - 1, currentPly + 1))} label="⟩" />
-            <NavBtn onClick={() => setCurrentPly(positions.length - 1)} label="⟩⟩" />
+            <NavBtn onClick={() => setCurrentPly(Math.min(positions.length - 1, currentPly + 1))} label="⟩" title="Next move (→)" />
+            <NavBtn onClick={() => setCurrentPly(positions.length - 1)} label="⟩⟩" title="Jump to end" />
           </div>
 
           {/* Eval graph */}
-          <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 mt-3" style={{ height: 120 }}>
+          <div
+            // Suppress the black focus ring that browsers draw on the chart's
+            // internal SVG / surface after a click. The chart is purely a
+            // visual surface; we don't want a keyboard-focus indicator.
+            className="border border-gray-700 rounded-lg p-2 mt-1 relative focus:outline-none [&_*]:focus:outline-none [&_*]:outline-none"
+            tabIndex={-1}
+            style={{ height: 100, background: '#475569' }}
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={evalData} onClick={(e) => {
-                if (e?.activeLabel) setCurrentPly(Number(e.activeLabel))
-              }}>
+              <AreaChart data={evalData} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}
+                onClick={(e) => {
+                  if (e?.activeLabel != null) setCurrentPly(Number(e.activeLabel))
+                }}>
                 <defs>
-                  <linearGradient id="evalGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ffffff" stopOpacity={0.3} />
-                    <stop offset="50%" stopColor="#ffffff" stopOpacity={0} />
-                    <stop offset="50%" stopColor="#000000" stopOpacity={0} />
-                    <stop offset="100%" stopColor="#000000" stopOpacity={0.3} />
+                  {/* Vertical gradient hard-stopping at the zero line so the
+                      area renders solid white above 0 and solid dark below 0.
+                      One area = one stroke, so there's no opposing-side trace
+                      bleeding across the midline. */}
+                  <linearGradient id="evalSplit" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="50%" stopColor="#f8fafc" stopOpacity={1} />
+                    <stop offset="50%" stopColor="#020617" stopOpacity={1} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="ply" hide />
+                {/* Phase bands sit behind everything else */}
+                {phaseBands.map((b, i) => (
+                  <ReferenceArea
+                    key={`phase-${i}`}
+                    x1={b.from}
+                    x2={b.to}
+                    y1={-5}
+                    y2={5}
+                    fill={PHASE_COLORS[b.phase] ?? '#64748b'}
+                    fillOpacity={0.18}
+                    stroke="none"
+                    ifOverflow="hidden"
+                  />
+                ))}
+                <XAxis dataKey="ply" type="number" domain={[1, Math.max(1, evalData.length)]} hide />
                 <YAxis domain={[-5, 5]} hide />
-                <ReferenceLine y={0} stroke="#4b5563" />
-                <Tooltip contentStyle={{ background: '#16162a', border: '1px solid #374151', fontSize: 12 }}
-                  formatter={(v) => [`${Number(v) > 0 ? '+' : ''}${v}`, 'Eval']} />
-                <Area type="monotone" dataKey="eval" stroke="#818cf8" fill="url(#evalGrad)" strokeWidth={1.5} dot={false} />
+                <ReferenceLine y={0} stroke="#e2e8f0" strokeWidth={1} strokeOpacity={0.5} />
+                {/* Single eval area: fill gradient splits at zero line */}
+                <Area
+                  type="monotone"
+                  dataKey="eval"
+                  stroke="#94a3b8"
+                  strokeWidth={1.5}
+                  fill="url(#evalSplit)"
+                  fillOpacity={1}
+                  isAnimationActive={false}
+                  baseValue={0}
+                  dot={false}
+                  activeDot={{ r: 0, fill: 'transparent', stroke: 'transparent' }}
+                  connectNulls
+                />
+                {/* Current-ply cursor */}
+                {currentPly >= 1 && (
+                  <ReferenceLine x={currentPly} stroke="#818cf8" strokeWidth={1.5} ifOverflow="hidden" />
+                )}
+                {/* Blunder / mistake / miss / inaccuracy markers */}
+                {errorDots.map((d, i) => (
+                  <ReferenceDot
+                    key={`err-${i}`}
+                    x={d.ply}
+                    y={d.eval}
+                    r={3.5}
+                    fill={CLASS_COLORS[d.classification]}
+                    stroke="#1f2937"
+                    strokeWidth={1.5}
+                    ifOverflow="visible"
+                  />
+                ))}
+                {/* Hover cursor only — popup card is suppressed */}
+                <Tooltip
+                  isAnimationActive={false}
+                  wrapperStyle={{ display: 'none' }}
+                  cursor={{ stroke: '#818cf8', strokeWidth: 1, fill: 'transparent' }}
+                  content={() => null}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Right panel */}
-        <div className="space-y-3">
+        {/* Right panel — player headers + analysis */}
+        <div className="flex flex-col gap-3 min-h-0">
+          {/* Player strips at the top so the names sit beside the board
+              instead of above/below it. Opponent first, then the user, so
+              the column reads top-to-bottom like a scoresheet. */}
+          <PlayerStrip {...topPlayer} toMove={topToMove} />
+          <PlayerStrip {...bottomPlayer} toMove={bottomToMove} />
+
           {/* Accuracy & classification summary */}
           <div className="bg-[#16162a] border border-gray-700 rounded-lg p-4">
             <div className="text-center mb-3">
@@ -266,26 +449,41 @@ export default function GameReview() {
                 <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Not yet analyzed</div>
               )}
             </div>
-            <div className="grid grid-cols-6 gap-1 text-center text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Move classifications
+              </span>
+              <InfoTip label="Move classification definitions" wide align="right">
+                <div className="space-y-1.5">
+                  {(['best', 'good', 'inaccuracy', 'mistake', 'miss', 'blunder'] as const).map((cls) => (
+                    <div key={cls} className="flex gap-2">
+                      <span
+                        className="font-bold capitalize whitespace-nowrap"
+                        style={{ color: CLASS_COLORS[cls], minWidth: 70 }}
+                      >
+                        {CLASS_ICONS[cls]} {cls}
+                      </span>
+                      <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        {CLASS_DESCRIPTIONS[cls]}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </InfoTip>
+            </div>
+            <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 text-center text-xs">
               {(
                 ['best', 'good', 'inaccuracy', 'mistake', 'miss', 'blunder'] as const
               ).map((cls) => (
                 <div key={cls}>
-                  <div className="font-bold text-lg" style={{ color: CLASS_COLORS[cls] }}>
+                  <div className="font-bold text-lg leading-tight" style={{ color: CLASS_COLORS[cls] }}>
                     {classCounts[cls] || 0}
                   </div>
-                  <div className="capitalize inline-flex items-center gap-0.5" style={{ color: 'var(--text-muted)' }}>
+                  <div className="capitalize" style={{ color: 'var(--text-muted)' }}>
                     {cls}
-                    <InfoTip label={`What ${cls} means`}>{CLASS_DESCRIPTIONS[cls]}</InfoTip>
                   </div>
                 </div>
               ))}
-            </div>
-            <div className="mt-3 pt-3 border-t text-[11px]" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
-              <span className="inline-flex items-center gap-1">
-                CPL shown below
-                <InfoTip>{CPL_EXPLANATION}</InfoTip>
-              </span>
             </div>
           </div>
 
@@ -318,8 +516,30 @@ export default function GameReview() {
             </div>
           )}
 
-          {/* Move list */}
-          <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 overflow-y-auto" style={{ maxHeight: 400 }}>
+          {/* Engine's best move from the current position */}
+          {bestSan && (
+            <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span
+                  className="inline-block rounded-sm"
+                  style={{ width: 10, height: 10, background: 'rgba(34, 197, 94, 0.85)' }}
+                  aria-hidden
+                />
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {whiteToMove ? 'White' : 'Black'} to play &mdash; engine suggests
+                </span>
+              </div>
+              <span className="font-mono text-sm text-green-400">
+                {bestSan}{playedMatchesBest && currentMove ? ' ✓' : ''}
+              </span>
+            </div>
+          )}
+
+          {/* Move list — `flex-1 min-h-0` fills the remaining height of the
+              right column. Since the parent grid row is height-capped above,
+              this naturally ends exactly where the eval chart ends on the
+              left. */}
+          <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 overflow-y-auto flex-1 min-h-0">
             <div className="grid grid-cols-[32px_1fr_1fr] gap-y-0.5 text-sm">
               {game.moves.reduce<Array<{ num: number; white?: typeof game.moves[0]; black?: typeof game.moves[0] }>>(
                 (acc, move) => {
@@ -335,6 +555,56 @@ export default function GameReview() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function NavBtn({ onClick, label, title }: { onClick: () => void; label: string; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="w-7 h-7 rounded flex items-center justify-center bg-[#16162a] border border-gray-600 hover:bg-gray-700 text-xs transition-colors"
+      style={{ color: 'var(--text-primary)' }}
+    >
+      {label}
+    </button>
+  )
+}
+
+function PlayerStrip({ name, rating, color, isUser, toMove }: {
+  name: string
+  rating: number | null
+  color: 'white' | 'black'
+  isUser: boolean
+  toMove: boolean
+}) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 bg-[#16162a] border border-gray-700 rounded">
+      <span
+        className="inline-block rounded-sm border"
+        style={{
+          width: 14,
+          height: 14,
+          background: color === 'white' ? '#f1f5f9' : '#0b0b14',
+          borderColor: color === 'white' ? '#cbd5e1' : '#6b7280',
+        }}
+        aria-label={`${color} pieces`}
+      />
+      <span className="text-white font-semibold truncate">{name}</span>
+      {rating != null && (
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>({rating})</span>
+      )}
+      {isUser && (
+        <span className="text-[10px] font-bold uppercase tracking-wide bg-indigo-600/30 text-indigo-300 px-1.5 py-0.5 rounded">
+          You
+        </span>
+      )}
+      {toMove && (
+        <span className="ml-auto text-xs font-medium" style={{ color: '#22c55e' }}>
+          ● to move
+        </span>
+      )}
     </div>
   )
 }
@@ -373,13 +643,57 @@ function MoveCell({ move, isActive, onClick }: {
   )
 }
 
-function NavBtn({ onClick, label }: { onClick: () => void; label: string }) {
+function EvalBar({ cp, flipped }: { cp: number | null; flipped: boolean }) {
+  // Lichess-style: the dark background represents black's share; an absolutely
+  // positioned white block fills from the white player's side. Using absolute
+  // positioning rather than a flex column avoids the percentage-height collapse
+  // that left the white half invisible inside a flex parent with no resolved
+  // intrinsic height.
+  const whitePct = cp == null
+    ? 50
+    : Math.max(2, Math.min(98, 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * Math.max(-1500, Math.min(1500, cp)))) - 1)))
+  const evalText = cp == null
+    ? null
+    : Math.abs(cp) >= 1000
+      ? `${cp > 0 ? '+' : '−'}${(Math.abs(cp) / 100).toFixed(0)}`
+      : `${cp > 0 ? '+' : cp < 0 ? '−' : ''}${(Math.abs(cp) / 100).toFixed(1)}`
+  // The number sits at the bar's vertical midpoint and flips its colour based
+  // on whichever side currently covers the centre line — so it's always
+  // contrast-readable, no matter the orientation.
+  const middleIsWhite = whitePct > 50
   return (
-    <button onClick={onClick}
-      className="w-9 h-9 rounded flex items-center justify-center bg-[#16162a] border border-gray-600 hover:bg-gray-700 text-sm"
-      style={{ color: 'var(--text-primary)' }}>
-      {label}
-    </button>
+    <div
+      className="rounded overflow-hidden relative flex-shrink-0 self-stretch"
+      style={{ width: 22, background: '#1f2937' }}
+    >
+      {/* White block anchored to white's side of the board */}
+      <div
+        className="absolute left-0 right-0 transition-all duration-300"
+        style={{
+          height: `${whitePct}%`,
+          background: '#f1f5f9',
+          ...(flipped ? { top: 0 } : { bottom: 0 }),
+        }}
+      />
+      {/* Midline at 50% as an "equal" reference */}
+      <div
+        className="absolute left-0 right-0 pointer-events-none"
+        style={{ top: '50%', height: 1, background: 'rgba(0,0,0,0.35)' }}
+      />
+      {evalText && (
+        <span
+          className="absolute left-0 right-0 text-center font-bold leading-none select-none pointer-events-none"
+          style={{
+            fontSize: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: middleIsWhite ? '#0b0b14' : '#f1f5f9',
+          }}
+        >
+          {evalText}
+        </span>
+      )}
+    </div>
   )
 }
 

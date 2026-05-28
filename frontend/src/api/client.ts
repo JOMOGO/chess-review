@@ -75,8 +75,19 @@ export function getGame(gameId: string) {
 }
 
 // Insights
-export function getOpeningTree(playerId: string, minVisits = 5, maxPly = 24, range?: TimeRange) {
-  const qs = buildQs(`min_visits=${minVisits}`, `max_ply=${maxPly}`, rangeQs(range));
+export function getOpeningTree(
+  playerId: string,
+  minVisits = 5,
+  maxPly = 24,
+  range?: TimeRange,
+  color?: 'white' | 'black',
+) {
+  const qs = buildQs(
+    `min_visits=${minVisits}`,
+    `max_ply=${maxPly}`,
+    rangeQs(range),
+    color ? `color=${color}` : undefined,
+  );
   return request<{ nodes: OpeningTreeNode[] }>(`/players/${playerId}/insights/opening-tree${qs}`);
 }
 
@@ -241,6 +252,7 @@ export interface GameMove {
   classification: string | null;
   phase: string | null;
   is_user_move: boolean;
+  best_move_uci: string | null;
 }
 
 export interface GameDetail {
@@ -266,8 +278,13 @@ export interface OpeningTreeNode {
   fen_key: string;
   san: string;
   visit_count: number;
+  user_move_count: number;
   avg_cp_loss: number;
   total_cp_loss: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  score_rate: number;
   children: OpeningTreeNode[];
 }
 
@@ -300,6 +317,7 @@ export interface AccuracyPoint {
 
 export interface OpeningStat {
   eco: string | null;
+  parent_eco: string | null;
   opening_name: string;
   color: string;
   games: number;
@@ -307,7 +325,9 @@ export interface OpeningStat {
   draws: number;
   losses: number;
   win_rate: number;
+  score_rate: number;
   avg_cpl: number;
+  last_played_at: string | null;
 }
 
 export interface RatingBucket {

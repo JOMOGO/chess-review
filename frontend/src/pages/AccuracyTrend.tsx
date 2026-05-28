@@ -9,6 +9,7 @@ import { getAccuracyTrend, type TimeRange } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
+import QueryError from '../components/QueryError'
 import { CPL_EXPLANATION } from '../lib/explanations'
 
 export default function AccuracyTrend() {
@@ -24,6 +25,8 @@ export default function AccuracyTrend() {
   const data = query.data ?? []
 
   if (query.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+  if (query.isError) return <QueryError error={query.error} />
+
 
   const withRolling = data.map((d, i) => {
     const window = data.slice(Math.max(0, i - 19), i + 1)

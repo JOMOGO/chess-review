@@ -8,6 +8,7 @@ import { getPhasePerformance, type TimeRange } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
+import QueryError from '../components/QueryError'
 import { CPL_EXPLANATION } from '../lib/explanations'
 
 const PHASE_DESCRIPTIONS: Record<string, string> = {
@@ -32,6 +33,8 @@ export default function PhaseDashboard() {
   const data = query.data ?? []
 
   if (query.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+  if (query.isError) return <QueryError error={query.error} />
+
 
   const chartData = data.map((d) => ({
     phase: d.phase,

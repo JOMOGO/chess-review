@@ -11,6 +11,10 @@ import uvicorn
 from chess_review.main import app  # direct import — works in frozen exe
 from chess_review.util.paths import get_app_data_dir
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _pin_webview2_user_data_dir() -> None:
     """Make WebView2 store its profile under %LOCALAPPDATA%/ChessReview/webview/.
@@ -92,7 +96,7 @@ def main() -> None:
 
     # Wait for server to be fully ready (DB, Stockfish pool, etc.)
     if not _wait_for_server(url):
-        print("Server failed to start within 30 seconds")
+        logger.error("Server failed to start within 30 seconds")
         return
 
     # Open native window

@@ -7,10 +7,14 @@ export default function InfoTip({
   children,
   label = 'More info',
   side = 'top',
+  align = 'center',
+  wide = false,
 }: {
   children: ReactNode
   label?: string
   side?: 'top' | 'bottom'
+  align?: 'center' | 'left' | 'right'
+  wide?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -43,7 +47,9 @@ export default function InfoTip({
       {open && (
         <span
           role="tooltip"
-          className={`absolute left-1/2 -translate-x-1/2 z-50 w-64 p-2.5 text-xs rounded-md border shadow-lg ${
+          className={`absolute z-50 ${wide ? 'w-80' : 'w-64'} p-2.5 text-xs rounded-md border shadow-lg ${
+            align === 'right' ? 'right-0' : align === 'left' ? 'left-0' : 'left-1/2 -translate-x-1/2'
+          } ${
             side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
           }`}
           style={{

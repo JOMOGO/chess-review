@@ -4,11 +4,11 @@ import PlayerImport from './pages/PlayerImport'
 import PlayerDashboard from './pages/PlayerDashboard'
 import GameList from './pages/GameList'
 import GameReview from './pages/GameReview'
-import OpeningTree from './pages/OpeningTree'
+import Openings from './pages/Openings'
+import OpeningsLegacyRedirect from './pages/OpeningsLegacyRedirect'
 import PhaseDashboard from './pages/PhaseDashboard'
 import TimePressure from './pages/TimePressure'
 import AccuracyTrend from './pages/AccuracyTrend'
-import OpeningStats from './pages/OpeningStats'
 import RatingPerformance from './pages/RatingPerformance'
 import Recommendations from './pages/Recommendations'
 import TacticalPatterns from './pages/TacticalPatterns'
@@ -33,11 +33,12 @@ function AppRoutes() {
       <Route path="/players/:id" element={<PlayerDashboard />} />
       <Route path="/players/:id/games" element={<GameList />} />
       <Route path="/games/:id" element={<GameReview />} />
-      <Route path="/players/:id/openings" element={<OpeningTree />} />
+      <Route path="/players/:id/openings" element={<Openings />} />
       <Route path="/players/:id/phases" element={<PhaseDashboard />} />
       <Route path="/players/:id/time" element={<TimePressure />} />
       <Route path="/players/:id/accuracy" element={<AccuracyTrend />} />
-      <Route path="/players/:id/opening-stats" element={<OpeningStats />} />
+      {/* Legacy URL: redirect to umbrella with the list tab pre-selected. */}
+      <Route path="/players/:id/opening-stats" element={<OpeningsLegacyRedirect />} />
       <Route path="/players/:id/ratings" element={<RatingPerformance />} />
       <Route path="/players/:id/recommendations" element={<Recommendations />} />
       <Route path="/players/:id/tactics" element={<TacticalPatterns />} />
