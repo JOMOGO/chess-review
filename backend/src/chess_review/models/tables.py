@@ -163,6 +163,35 @@ class GameMove(Base):
     )
 
 
+class EndgameReach(Base):
+    """A point in a game where the user reached an endgame with a sustained
+    winning advantage (>=+200cp for >=4 consecutive plies in the endgame
+    phase). Records whether the game was actually won from there.
+
+    At most one row per game (the *first* such entry — that's the moment
+    where "conversion technique" starts mattering).
+    """
+
+    __tablename__ = "endgame_reaches"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_new_uuid)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("games.id"), nullable=False
+    )
+    entry_ply: Mapped[int] = mapped_column(Integer, nullable=False)
+    bucket: Mapped[str] = mapped_column(Text, nullable=False)
+    user_cp_at_entry: Mapped[int] = mapped_column(Integer, nullable=False)
+    converted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_endgame_game", "game_id", unique=True),
+        Index("ix_endgame_bucket_converted", "bucket", "converted"),
+    )
+
+
 class MoveTactic(Base):
     """A tactical motif detected on a single move.
 

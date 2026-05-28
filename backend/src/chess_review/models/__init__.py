@@ -1,4 +1,5 @@
 from chess_review.models.tables import (
+    EndgameReach,
     Game,
     GameMove,
     ImportJob,
@@ -9,6 +10,7 @@ from chess_review.models.tables import (
 )
 
 __all__ = [
+    "EndgameReach",
     "Game",
     "GameMove",
     "ImportJob",

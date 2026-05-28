@@ -13,6 +13,7 @@ from chess_review.db import async_session
 from chess_review.ingestion.chesscom import ChessComClient
 from chess_review.ingestion.pgn_parser import parse_chesscom_game
 from chess_review.models import (
+    EndgameReach,
     Game,
     GameMove,
     ImportJob,
@@ -808,6 +809,25 @@ async def _analyze_single_game(
 
         if motif_rows:
             session.add_all(motif_rows)
+
+        # Endgame reach: first ply where the user has a sustained >=+200cp
+        # advantage in the endgame phase. One row per game. Skipped if a
+        # row already exists (re-analysis of a previously-analyzed game).
+        from chess_review.analysis.endgames import detect_won_endgame
+
+        reach = detect_won_endgame(game.moves, game.user_color)
+        if reach is not None:
+            existing_reach = (await session.execute(
+                select(EndgameReach.id).where(EndgameReach.game_id == game.id)
+            )).scalar_one_or_none()
+            if existing_reach is None:
+                session.add(EndgameReach(
+                    game_id=game.id,
+                    entry_ply=reach["entry_ply"],
+                    bucket=reach["bucket"],
+                    user_cp_at_entry=reach["user_cp_at_entry"],
+                    converted=(game.user_result == "win"),
+                ))
 
         game.analyzed_at = datetime.now(timezone.utc)
 

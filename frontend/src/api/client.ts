@@ -133,6 +133,23 @@ export function getMotifExamples(
   );
 }
 
+export function getEndgames(playerId: string, minReached = 2, range?: TimeRange) {
+  const qs = buildQs(`min_reached=${minReached}`, rangeQs(range));
+  return request<EndgameBucket[]>(`/players/${playerId}/insights/endgames${qs}`);
+}
+
+export function getEndgameExamples(
+  playerId: string,
+  bucket: string,
+  limit = 20,
+  range?: TimeRange,
+) {
+  const qs = buildQs(`limit=${limit}`, rangeQs(range));
+  return request<EndgameExample[]>(
+    `/players/${playerId}/insights/endgames/${encodeURIComponent(bucket)}${qs}`,
+  );
+}
+
 // Health
 export function getHealth() {
   return request<HealthStatus>('/health');
@@ -387,5 +404,26 @@ export interface MotifExample {
   cp_loss: number | null;
   opening_name: string | null;
   user_result: string;
+  played_at: string;
+}
+
+export interface EndgameBucket {
+  bucket: string;
+  reached: number;
+  converted: number;
+  conversion_rate: number;
+  avg_cp_at_entry: number;
+}
+
+export interface EndgameExample {
+  reach_id: string;
+  game_id: string;
+  entry_ply: number;
+  user_cp_at_entry: number;
+  converted: boolean;
+  opening_name: string | null;
+  user_result: string;
+  user_color: string;
+  time_class: string;
   played_at: string;
 }

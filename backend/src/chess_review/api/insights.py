@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from chess_review.analytics.accuracy import get_accuracy_trend
+from chess_review.analytics.endgames import get_endgame_examples, get_endgame_summary
 from chess_review.analytics.motifs import get_motif_examples, get_motif_summary
 from chess_review.analytics.opening_tree import build_opening_tree
 from chess_review.analytics.openings_winrate import get_opening_stats
@@ -159,5 +160,32 @@ async def motif_examples(
 ) -> list[dict]:
     return await get_motif_examples(
         session, player_id, motif, limit=limit,
+        since=_resolve_since(range, None),
+    )
+
+
+@router.get("/endgames")
+async def endgames(
+    player_id: uuid.UUID,
+    min_reached: int = 2,
+    range: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    return await get_endgame_summary(
+        session, player_id, since=_resolve_since(range, None),
+        min_reached=min_reached,
+    )
+
+
+@router.get("/endgames/{bucket}")
+async def endgame_examples(
+    player_id: uuid.UUID,
+    bucket: str,
+    limit: int = 20,
+    range: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    return await get_endgame_examples(
+        session, player_id, bucket, limit=limit,
         since=_resolve_since(range, None),
     )

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { BookOpen, Clock, Hourglass, List, Sparkles, Target, Trophy, Zap, type LucideIcon } from 'lucide-react'
+import { BookOpen, Clock, Crown, Hourglass, List, Sparkles, Target, Trophy, Zap, type LucideIcon } from 'lucide-react'
 import {
   getPlayer, listGames, startImport, getImportStatus,
   getAccuracyTrend,
@@ -177,6 +177,7 @@ export default function PlayerDashboard() {
         <NavCard to={`/players/${id}/time`} Icon={Clock} label="Time Pressure" desc="CPL vs clock" />
         <NavCard to={`/players/${id}/ratings`} Icon={Trophy} label="By Rating" desc="vs opponent strength" />
         <NavCard to={`/players/${id}/tactics`} Icon={Zap} label="Tactics" desc="Forks, pins, missed mates" />
+        <NavCard to={`/players/${id}/endgames`} Icon={Crown} label="Endgames" desc="Conversion of won endgames" />
       </div>
 
       {games && games.games.length > 0 && (
