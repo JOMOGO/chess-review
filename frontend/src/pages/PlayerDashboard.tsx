@@ -137,11 +137,18 @@ export default function PlayerDashboard() {
         />
         <SummaryCard
           label="Analyzed games"
-          value={trend.length}
+          value={
+            totalGames > 0 && totalGames !== trend.length
+              ? `${trend.length} / ${totalGames}`
+              : trend.length
+          }
           info={
             <>
-              Games that finished engine analysis in the selected range.
-              Stats above are computed from these games only.
+              The first number is how many games had enough user moves to
+              score accuracy. The second is the total finished engine
+              analysis in the selected range. They differ when you have
+              extremely short games (instant resignations, 0-ply abandons)
+              — those still get analyzed but there&apos;s nothing to score.
             </>
           }
         />
