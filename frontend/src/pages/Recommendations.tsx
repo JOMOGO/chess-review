@@ -14,11 +14,14 @@ import { useTimeRange } from '../lib/useTimeRange'
 const KIND_LABELS: Record<Recommendation['kind'], string> = {
   opening_leak: 'Opening',
   phase_weakness: 'Phase',
+  phase_vs_peer: 'Phase vs peer',
   time_pressure: 'Time',
   rating_wall: 'Rating',
   color_asymmetry: 'Color',
   missed_wins: 'Conversion',
+  endgame_pattern: 'Endgame type',
   anti_repertoire: 'Unprepared',
+  tactic_blindspot: 'Tactic blindspot',
   blunder_pattern: 'Blunder kind',
   time_of_day: 'Time of day',
   tilt: 'Tilt',
@@ -27,11 +30,14 @@ const KIND_LABELS: Record<Recommendation['kind'], string> = {
 const KIND_COLORS: Record<Recommendation['kind'], string> = {
   opening_leak: '#a78bfa',
   phase_weakness: '#fb923c',
+  phase_vs_peer: '#818cf8',
   time_pressure: '#f87171',
   rating_wall: '#facc15',
   color_asymmetry: '#34d399',
   missed_wins: '#60a5fa',
+  endgame_pattern: '#a3e635',
   anti_repertoire: '#c084fc',
+  tactic_blindspot: '#5eead4',
   blunder_pattern: '#f43f5e',
   time_of_day: '#22d3ee',
   tilt: '#fb7185',
@@ -286,6 +292,18 @@ const CATALOGUE: CatalogueEntry[] = [
       'Open the Phase Performance page; jump to Lichess puzzles tagged with that phase theme (opening / middlegame / endgame).',
   },
   {
+    kind: 'phase_vs_peer',
+    title: 'Phase vs peer',
+    what:
+      'A phase where the opponents you actually face play meaningfully better than you do — catches relative weaknesses that phase_weakness misses (your CPL looks fine for you, but lags the player pool you face).',
+    when_triggered:
+      'Opponent sample ≥ 50 moves in that phase AND (your CPL − opponent CPL) ≥ 5 cp.',
+    evidence:
+      'Phase, your CPL, opponent CPL, the CP delta, user move count, opponent move count.',
+    actions:
+      'Open Phase Performance (which now shows the You/Opp/Δ breakdown); solve Lichess puzzles tagged with that phase theme.',
+  },
+  {
     kind: 'time_pressure',
     title: 'Time-pressure cliff',
     what:
@@ -334,6 +352,18 @@ const CATALOGUE: CatalogueEntry[] = [
       'Drill endgame puzzles; open the Phase Performance page to inspect endgame CPL specifically.',
   },
   {
+    kind: 'endgame_pattern',
+    title: 'Endgame type weakness',
+    what:
+      'A specific endgame bucket (rook + pawns vs rook, K + P vs K, etc.) you convert poorly — much more actionable than "your endgame is bad" because it points at a concrete technique to study.',
+    when_triggered:
+      'You reached the bucket with a winning eval in ≥ 3 games AND converted < 60% of those.',
+    evidence:
+      'Bucket name, games reached, games converted, conversion rate, games where you "lost the win", average eval at entry.',
+    actions:
+      'Open the Endgames page (drill into the bucket); solve Lichess endgame puzzles.',
+  },
+  {
     kind: 'anti_repertoire',
     title: 'Unprepared line',
     what:
@@ -344,6 +374,18 @@ const CATALOGUE: CatalogueEntry[] = [
       'Opening name, ECO, color, games, W/D/L, win rate, opening CPL, baseline CPL.',
     actions:
       'Open the Lichess Opening Browser for the line; review the few games you have.',
+  },
+  {
+    kind: 'tactic_blindspot',
+    title: 'Tactic blindspot',
+    what:
+      'A specific tactical motif (fork, pin, skewer, …) you miss disproportionately often — compared to how common that motif is in chess generally, not just by raw count. Surfaces "you\'re especially bad at forks" rather than "you missed lots of forks" (which would be true for everyone).',
+    when_triggered:
+      '≥ 10 misses of the motif overall AND the motif\'s share of your missed tactics is ≥ 1.5× its baseline share in chess.',
+    evidence:
+      'Motif, your miss count, share of your misses, the baseline share, the lift ratio, average cp_loss per miss, games affected.',
+    actions:
+      'Solve Lichess puzzles tagged with the motif (when there\'s a matching theme); open the Tactical Patterns page.',
   },
   {
     kind: 'blunder_pattern',

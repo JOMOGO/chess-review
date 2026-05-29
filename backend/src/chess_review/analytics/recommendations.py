@@ -18,11 +18,12 @@ from sqlalchemy import Integer, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from chess_review.analytics.accuracy import compute_game_accuracy
+from chess_review.analytics.endgames import get_endgame_summary
 from chess_review.analytics.openings_winrate import get_opening_stats
 from chess_review.analytics.phase_split import get_phase_performance
 from chess_review.analytics.rating_performance import get_rating_performance
 from chess_review.analytics.time_pressure import get_time_pressure
-from chess_review.models import Game, GameMove, Position
+from chess_review.models import Game, GameMove, MoveTactic, Position
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,73 @@ TIME_OF_DAY_CPL_RATIO = 1.3
 TILT_MIN_SAMPLES_EACH = 10     # min comparisons in each side (post-loss / post-win)
 TILT_ACCURACY_GAP = 5.0        # post-loss accuracy >= 5 points lower than post-win
 SESSION_GAP_SECONDS = 60 * 60  # 60 minutes between games = new session
+
+# Tactic blindspot — flag a motif if you miss it noticeably more often than its
+# share of tactical opportunities in chess generally (rough Lichess-puzzle-
+# derived priors). Lift ≥ 1.5 means "1.5× your fair share of misses on this
+# motif" — clear signal. ≥ 10 misses required so a single bad game doesn't
+# crown smothered mate as your nemesis.
+BLINDSPOT_LIFT_RATIO = 1.5
+BLINDSPOT_MIN_MISSES = 10
+# Raw shares are rough; normalised at module load so they sum to 1 over the
+# motifs the detector recognises. If a new motif kind is added to the
+# detector, give it a baseline share here too — otherwise it'll appear as
+# 100% "over-representation" the first time you miss one.
+_MOTIF_BASELINE_RAW = {
+    "fork": 0.25,
+    "pin": 0.15,
+    "removal_of_defender": 0.06,
+    "trapped_piece": 0.06,
+    "skewer": 0.05,
+    "discovered_attack": 0.04,
+    "deflection": 0.04,
+    "back_rank_mate": 0.03,
+    "pawn_promotion": 0.02,
+    "smothered_mate": 0.005,
+}
+_MOTIF_BASELINE = {
+    k: v / sum(_MOTIF_BASELINE_RAW.values())
+    for k, v in _MOTIF_BASELINE_RAW.items()
+}
+_MOTIF_HUMAN_LABEL = {
+    "fork": "forks",
+    "pin": "pins",
+    "skewer": "skewers",
+    "discovered_attack": "discovered attacks",
+    "removal_of_defender": "defender-removal tactics",
+    "back_rank_mate": "back-rank mates",
+    "smothered_mate": "smothered mates",
+    "trapped_piece": "trapped-piece tactics",
+    "deflection": "deflections",
+    "pawn_promotion": "promotion tactics",
+}
+# Lichess puzzle theme slugs (camelCase as Lichess serves them). Motifs
+# without a clean Lichess theme fall back to the mixed trainer via
+# _lichess_puzzle_url.
+_MOTIF_PUZZLE_THEME = {
+    "fork": "fork",
+    "pin": "pin",
+    "skewer": "skewer",
+    "discovered_attack": "discoveredAttack",
+    "removal_of_defender": "attraction",
+    "back_rank_mate": "backRankMate",
+    "smothered_mate": "smotheredMate",
+    "deflection": "deflection",
+    "pawn_promotion": "promotion",
+}
+
+# Endgame-type weakness — bucket-level conversion. Threshold deliberately
+# loose because the existing whole-game missed_wins covers the broad case;
+# this one catches buckets that are *specifically* weak.
+ENDGAME_PATTERN_MIN_REACHED = 3
+ENDGAME_PATTERN_CONVERSION_FLOOR = 0.6
+
+# Phase vs peer — flag a phase where your CPL is meaningfully worse than
+# the average opponent's CPL in the same phase. Complement to
+# phase_weakness (which is YOUR phase vs YOUR baseline) — catches cases
+# where your phase looks fine on paper but lags the people you actually play.
+PHASE_VS_PEER_DELTA_CP = 5.0
+PHASE_VS_PEER_MIN_OPP_MOVES = 50
 
 # Top-N returned to the page
 TOP_N = 12
@@ -195,7 +263,14 @@ async def _color_split(
 
 # Lichess puzzle theme slugs that Lichess actually serves. "tactics" is NOT
 # one of them — Lichess routes /training (no slug) to a mixed tactics trainer.
-_LICHESS_PUZZLE_THEMES = {"opening", "middlegame", "endgame", "hangingPiece"}
+# Motif themes here mirror keys in _MOTIF_PUZZLE_THEME (kept in sync by
+# convention; if a motif maps to a slug not in this set the URL builder
+# falls back to /training, which is a graceful degradation).
+_LICHESS_PUZZLE_THEMES = {
+    "opening", "middlegame", "endgame", "hangingPiece",
+    "fork", "pin", "skewer", "discoveredAttack", "attraction",
+    "backRankMate", "smotheredMate", "deflection", "promotion",
+}
 
 
 def _lichess_puzzle_url(theme: str) -> str:
@@ -1050,6 +1125,248 @@ async def _detect_tilt(
     }]
 
 
+async def _detect_tactic_blindspot(
+    session: AsyncSession,
+    player_id: uuid.UUID,
+    since: datetime | None,
+) -> list[dict]:
+    """Motifs you miss disproportionately often vs how common they are in chess.
+
+    Raw counts would just surface "you missed a lot of forks" for every
+    player (because forks are common); we want the motif whose *share* of
+    your missed tactics is over its expected baseline share. Lift ≥ 1.5
+    with at least BLINDSPOT_MIN_MISSES instances triggers a flag.
+    """
+    filters = [
+        Game.player_id == player_id,
+        Game.analyzed_at.isnot(None),
+        GameMove.is_user_move.is_(True),
+    ]
+    if since is not None:
+        filters.append(Game.played_at >= since)
+
+    rows = (await session.execute(
+        select(
+            MoveTactic.motif,
+            func.count().label("misses"),
+            func.count(func.distinct(GameMove.game_id)).label("games"),
+            func.avg(GameMove.cp_loss).label("avg_cp_loss"),
+        )
+        .join(GameMove, GameMove.id == MoveTactic.game_move_id)
+        .join(Game, Game.id == GameMove.game_id)
+        .where(and_(*filters))
+        .group_by(MoveTactic.motif)
+    )).all()
+    if not rows:
+        return []
+    total = sum(int(r.misses) for r in rows)
+    if total < BLINDSPOT_MIN_MISSES:
+        return []
+
+    out: list[dict] = []
+    for r in rows:
+        misses = int(r.misses)
+        if misses < BLINDSPOT_MIN_MISSES:
+            continue
+        baseline = _MOTIF_BASELINE.get(r.motif)
+        if baseline is None:
+            # Detector grew a new motif kind not yet in the baseline table.
+            # Skip rather than fabricate a comparison — drops noisily-flagged
+            # zero-share lift values that would always read as "blindspot".
+            continue
+        share = misses / total
+        lift = share / baseline if baseline > 0 else 0.0
+        if lift < BLINDSPOT_LIFT_RATIO:
+            continue
+
+        severity = _clamp01((lift - 1.0) / 2.0)
+        volume = _clamp01(misses / max(total, 1))
+        score = _score(severity, volume)
+        label = _MOTIF_HUMAN_LABEL.get(r.motif, r.motif.replace("_", " "))
+        theme = _MOTIF_PUZZLE_THEME.get(r.motif)
+        actions: list[dict] = []
+        if theme is not None:
+            actions.append({
+                "kind": "puzzle_theme",
+                "label": f"Solve Lichess '{theme}' puzzles",
+                "href": _lichess_puzzle_url(theme),
+                "external": True,
+            })
+        actions.append({
+            "kind": "view_tactics",
+            "label": "Open Tactical Patterns page",
+            "href": f"/players/{player_id}/tactics",
+        })
+
+        out.append({
+            "id": f"tactic_blindspot:{r.motif}",
+            "kind": "tactic_blindspot",
+            "title": f"You miss {label} more than expected",
+            "summary": (
+                f"{label.capitalize()} are {share*100:.0f}% of your missed tactics "
+                f"({misses} of {total}) — {lift:.1f}× the baseline share "
+                f"({baseline*100:.0f}%) for chess generally."
+            ),
+            "score": score,
+            "severity": round(severity, 3),
+            "volume": round(volume, 3),
+            "evidence": {
+                "motif": r.motif,
+                "misses": misses,
+                "games_affected": int(r.games or 0),
+                "share_of_misses": round(share, 3),
+                "baseline_share": round(baseline, 3),
+                "lift": round(lift, 2),
+                "avg_cp_loss": round(float(r.avg_cp_loss or 0), 0),
+                "total_missed_tactics": total,
+            },
+            "actions": actions,
+        })
+
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
+async def _detect_endgame_pattern(
+    session: AsyncSession,
+    player_id: uuid.UUID,
+    since: datetime | None,
+) -> list[dict]:
+    """Endgame buckets (KRPvKR, KPvK, etc.) with poor conversion.
+
+    Complements ``missed_wins`` (whole-game) by pinpointing *which kind* of
+    endgame is leaking points — a player who converts 90% of pawn endings
+    but 30% of rook endings should drill rook technique, not "endgames" as
+    a vague category.
+    """
+    buckets = await get_endgame_summary(
+        session, player_id,
+        since=since,
+        min_reached=ENDGAME_PATTERN_MIN_REACHED,
+    )
+    if not buckets:
+        return []
+
+    total_reached = sum(b["reached"] for b in buckets)
+    out: list[dict] = []
+    for b in buckets:
+        rate = b["conversion_rate"]
+        if rate >= ENDGAME_PATTERN_CONVERSION_FLOOR:
+            continue
+        # "Reached" counts winning-eval entries; "lost the win" is the
+        # interesting number to surface, since that's what the player feels.
+        lost_the_win = b["reached"] - b["converted"]
+        severity = _clamp01(
+            (ENDGAME_PATTERN_CONVERSION_FLOOR - rate) / ENDGAME_PATTERN_CONVERSION_FLOOR
+        )
+        volume = _clamp01(b["reached"] / max(total_reached, 1) * 3)
+        score = _score(severity, volume)
+
+        out.append({
+            "id": f"endgame_pattern:{b['bucket']}",
+            "kind": "endgame_pattern",
+            "title": f"{b['bucket']} endings: only {int(rate*100)}% converted",
+            "summary": (
+                f"Reached {b['bucket']} with a winning eval in {b['reached']} "
+                f"games, won {b['converted']} ({int(rate*100)}%). Lost the win "
+                f"{lost_the_win} time{'s' if lost_the_win != 1 else ''}."
+            ),
+            "score": score,
+            "severity": round(severity, 3),
+            "volume": round(volume, 3),
+            "evidence": {
+                "bucket": b["bucket"],
+                "reached": b["reached"],
+                "converted": b["converted"],
+                "conversion_rate": rate,
+                "lost_the_win": lost_the_win,
+                "avg_cp_at_entry": b["avg_cp_at_entry"],
+            },
+            "actions": [
+                {
+                    "kind": "view_endgames",
+                    "label": "Open Endgames page (drill into this bucket)",
+                    "href": f"/players/{player_id}/endgames",
+                },
+                {
+                    "kind": "puzzle_theme",
+                    "label": "Solve Lichess endgame puzzles",
+                    "href": _lichess_puzzle_url("endgame"),
+                    "external": True,
+                },
+            ],
+        })
+
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
+async def _detect_phase_vs_peer(
+    session: AsyncSession,
+    player_id: uuid.UUID,
+    since: datetime | None,
+) -> list[dict]:
+    """Phases where your CPL is meaningfully worse than your opponents'.
+
+    Different angle than ``phase_weakness``: that one compares a phase to
+    YOUR own baseline (so a player whose all phases are equally bad gets
+    no flag); this one compares to the opponents you actually face, which
+    catches "this phase looks normal for me but the people I play do it
+    much better."
+    """
+    phases = await get_phase_performance(session, player_id, since)
+    out: list[dict] = []
+    for p in phases:
+        if p["opponent_sample_size"] < PHASE_VS_PEER_MIN_OPP_MOVES:
+            continue
+        delta = p["avg_cpl"] - p["opponent_avg_cpl"]
+        if delta < PHASE_VS_PEER_DELTA_CP:
+            continue
+
+        severity = _clamp01(delta / 30.0)
+        volume = _clamp01(p["sample_size"] / max(p["sample_size"] + p["opponent_sample_size"], 1) * 2)
+        score = _score(severity, volume)
+        theme = {"opening": "opening", "middlegame": "middlegame", "endgame": "endgame"}.get(p["phase"], "middlegame")
+
+        out.append({
+            "id": f"phase_vs_peer:{p['phase']}",
+            "kind": "phase_vs_peer",
+            "title": f"Opponents outplay you in the {p['phase']}",
+            "summary": (
+                f"CPL in {p['phase']}: you {p['avg_cpl']:.1f} vs opponents "
+                f"{p['opponent_avg_cpl']:.1f} (+{delta:.1f}). They handle this "
+                f"phase materially better than you do."
+            ),
+            "score": score,
+            "severity": round(severity, 3),
+            "volume": round(volume, 3),
+            "evidence": {
+                "phase": p["phase"],
+                "user_avg_cpl": p["avg_cpl"],
+                "opponent_avg_cpl": p["opponent_avg_cpl"],
+                "delta_cp": round(delta, 1),
+                "user_moves": p["sample_size"],
+                "opponent_moves": p["opponent_sample_size"],
+            },
+            "actions": [
+                {
+                    "kind": "view_phase",
+                    "label": "Open Phase Performance (with You/Opp/Δ breakdown)",
+                    "href": f"/players/{player_id}/phases",
+                },
+                {
+                    "kind": "puzzle_theme",
+                    "label": f"Solve Lichess '{theme}' puzzles",
+                    "href": _lichess_puzzle_url(theme),
+                    "external": True,
+                },
+            ],
+        })
+
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
 # --- Trend wrapper ----------------------------------------------------------
 
 def _prior_window(since: datetime | None) -> datetime | None:
@@ -1161,10 +1478,13 @@ async def get_recommendations(
 
     detectors_simple = [
         (_detect_phase_weakness, (session, player_id, baseline)),
+        (_detect_phase_vs_peer, (session, player_id)),
         (_detect_time_pressure, (session, player_id)),
         (_detect_rating_walls, (session, player_id, baseline)),
         (_detect_color_asymmetry, (session, player_id)),
         (_detect_missed_wins, (session, player_id)),
+        (_detect_endgame_pattern, (session, player_id)),
+        (_detect_tactic_blindspot, (session, player_id)),
         (_detect_blunder_pattern, (session, player_id, baseline)),
         (_detect_time_of_day, (session, player_id)),
         (_detect_tilt, (session, player_id)),

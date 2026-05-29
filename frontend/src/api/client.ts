@@ -378,11 +378,14 @@ export interface RecommendationAction {
 export type RecommendationKind =
   | 'opening_leak'
   | 'phase_weakness'
+  | 'phase_vs_peer'
   | 'time_pressure'
   | 'rating_wall'
   | 'color_asymmetry'
   | 'missed_wins'
+  | 'endgame_pattern'
   | 'anti_repertoire'
+  | 'tactic_blindspot'
   | 'blunder_pattern'
   | 'time_of_day'
   | 'tilt';
