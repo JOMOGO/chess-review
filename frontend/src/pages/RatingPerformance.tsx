@@ -11,6 +11,7 @@ import {
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import { rangeToPlayedFrom } from '../lib/timeRange'
+import { useTimeRange } from '../lib/useTimeRange'
 import InfoTip from '../components/InfoTip'
 import { CPL_EXPLANATION } from '../lib/explanations'
 import { colorIcon, resultIcon } from '../lib/format'
@@ -18,7 +19,7 @@ import QueryError from '../components/QueryError'
 
 export default function RatingPerformance() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
   const [openBucket, setOpenBucket] = useState<string | null>(null)
 
   const query = useQuery({

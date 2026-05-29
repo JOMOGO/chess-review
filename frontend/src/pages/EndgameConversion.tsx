@@ -6,10 +6,11 @@ import {
 } from 'recharts'
 import {
   getEndgames, getEndgameExamples,
-  type EndgameBucket, type TimeRange,
+  type EndgameBucket,
 } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
+import { useTimeRange } from '../lib/useTimeRange'
 import InfoTip from '../components/InfoTip'
 import { colorIcon } from '../lib/format'
 
@@ -37,7 +38,7 @@ function conversionColor(rate: number): string {
 
 export default function EndgameConversion() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
   const [selected, setSelected] = useState<string | null>(null)
 
   const summaryQuery = useQuery({

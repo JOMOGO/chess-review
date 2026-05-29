@@ -6,12 +6,13 @@ import {
 } from 'recharts'
 import {
   getMotifs, getMotifExamples,
-  type MotifSummary, type TimeRange,
+  type MotifSummary,
 } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
 import { resultIcon } from '../lib/format'
+import { useTimeRange } from '../lib/useTimeRange'
 
 const MOTIF_LABEL: Record<string, string> = {
   fork: 'Forks',
@@ -40,21 +41,21 @@ const MOTIF_DESCRIPTION: Record<string, string> = {
 }
 
 const MOTIF_COLOR: Record<string, string> = {
-  fork: '#f97316',
-  pin: '#a855f7',
-  skewer: '#ec4899',
-  discovered_attack: '#06b6d4',
-  removal_of_defender: '#22c55e',
-  back_rank_mate: '#ef4444',
-  smothered_mate: '#fbbf24',
-  trapped_piece: '#14b8a6',
-  deflection: '#8b5cf6',
-  pawn_promotion: '#10b981',
+  back_rank_mate: '#dc2626',     // red
+  fork: '#f97316',               // orange
+  smothered_mate: '#eab308',     // yellow
+  removal_of_defender: '#84cc16', // lime
+  pawn_promotion: '#10b981',     // emerald
+  discovered_attack: '#06b6d4',  // cyan
+  trapped_piece: '#3b82f6',      // blue
+  deflection: '#8b5cf6',         // violet
+  pin: '#d946ef',                // fuchsia
+  skewer: '#ec4899',             // pink
 }
 
 export default function TacticalPatterns() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
   const [selected, setSelected] = useState<string | null>(null)
 
   const summaryQuery = useQuery({

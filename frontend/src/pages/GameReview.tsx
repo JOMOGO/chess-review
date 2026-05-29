@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useParams, useLocation, useSearchParams } from 'react-router-dom'
+import { useParams, useLocation, useSearchParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Chessboard } from 'react-chessboard'
 import { Chess } from 'chess.js'
@@ -8,7 +8,6 @@ import {
   ReferenceArea, ReferenceDot,
 } from 'recharts'
 import { getGame } from '../api/client'
-import BackButton from '../components/BackButton'
 import InfoTip from '../components/InfoTip'
 
 const CLASS_COLORS: Record<string, string> = {
@@ -264,35 +263,39 @@ export default function GameReview() {
     return counts
   }, [game])
 
-  // The board's parent gives us an aspect-square slot whose pixel dimensions
-  // can be non-integer (e.g. 580.5px tall after the row's height is
-  // distributed). react-chessboard renders 8 squares as `grid-template-columns:
-  // repeat(8, 1fr)` — when the parent isn't a multiple of 8, the rows round
-  // inconsistently and you get hairline white gaps. Solution: measure the
-  // available square and snap to floor(dim / 8) * 8.
+  // Board sizing is computed from the GRID container's dimensions, not the
+  // slot's. The slot's width is `column_width - 26` and the column is pinned
+  // to `boardSize + 26`, so measuring the slot creates a circular dependency:
+  // once boardSize lands on any value (e.g. on first render before the game
+  // data loads and the right column stretches the row), the column pins to
+  // it and the slot width pins back to the same boardSize — subsequent
+  // resizes can't push the board larger because slot_w ≡ boardSize.
   //
-  // Using a callback ref via useState so the effect re-runs the moment the
-  // slot actually mounts. A plain useRef with `[]`-dep useEffect would miss
-  // this — on first render `query.isLoading` returns early and the slot div
-  // is never rendered, so the ref stays null and the observer never attaches.
-  const [boardSlot, setBoardSlot] = useState<HTMLDivElement | null>(null)
+  // The grid container's width comes from its block-level parent (page
+  // wrapper, w-full) and its height from `flex-1` of the definite-height
+  // wrapper. Both are independent of boardSize, so the math doesn't get
+  // stuck. We then subtract the known fixed chrome (right col + gaps + eval
+  // bar; nav buttons + chart + gaps) to get the max square.
+  //
+  // Callback ref via useState so the effect re-runs when the grid actually
+  // mounts (after the loading guard returns).
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null)
   const [boardSize, setBoardSize] = useState(0)
   useEffect(() => {
-    if (!boardSlot) return
+    if (!gridEl) return
     const recompute = () => {
-      const w = boardSlot.clientWidth
-      const h = boardSlot.clientHeight
-      // 920 matches the slot's max-w-[920px] cap; the 600 we had here was
-      // an old leftover that was silently clamping the board well below
-      // what the column could actually give it.
-      const dim = Math.min(w, h, 920)
+      // right col (340) + gap-4 (16) + eval bar (22) + gap-1 (4) = 382
+      const maxW = gridEl.clientWidth - 382
+      // nav buttons (28 + mt-1 4) + chart (80 + mt-1 4) = 116
+      const maxH = gridEl.clientHeight - 116
+      const dim = Math.min(maxW, maxH, 920)
       setBoardSize(Math.max(64, Math.floor(dim / 8) * 8))
     }
     recompute()
     const ro = new ResizeObserver(recompute)
-    ro.observe(boardSlot)
+    ro.observe(gridEl)
     return () => ro.disconnect()
-  }, [boardSlot])
+  }, [gridEl])
 
   if (query.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
   if (!game) return <p className="text-red-400">Game not found</p>
@@ -338,26 +341,36 @@ export default function GameReview() {
   const bottomToMove = !gameOver && ((bottomPlayer.color === 'white') === whiteToMove)
 
   return (
-    <div>
-      <BackButton to={backTo} label="Back" />
-
-      {/* Game meta header — kept compact so the grid row below it claims more
-          of the viewport (player names live in the right-column strips).
-          Width capped on lg+ to (boardSize + 26 left col + 16 gap + 340 right
-          col) so its right edge lands on the move-list's right edge instead of
-          stretching to the full max-w-7xl page width. */}
+    // Page wrapper sized to exactly (viewport - nav 52 - main py-6 = 100px).
+    // The grid below flex-fills the remaining space, so we don't depend on a
+    // magic deduction that has to stay in sync with the header chrome — when
+    // the meta bar's height drifts by a few px, no scrollbar appears.
+    <div className="lg:h-[calc(100vh-100px)] flex flex-col">
+      {/* Game meta header — back button is inline so we don't burn a whole
+          row on a single 36px link. Width capped on lg+ to (boardSize + 26 left
+          col + 16 gap + 340 right col) so its right edge lands on the move-
+          list's right edge instead of stretching to the full max-w-7xl page
+          width. */}
       <div
-        className="bg-[#16162a] border border-gray-700 rounded-lg px-3 py-1.5 mb-2 flex items-center justify-between text-sm lg:max-w-[var(--top-bar-w)]"
+        className="bg-[#16162a] border border-gray-700 rounded-lg px-3 py-1.5 mb-2 flex items-center gap-3 text-sm lg:max-w-[var(--top-bar-w)]"
         style={{ '--top-bar-w': boardSize > 0 ? `${boardSize + 382}px` : 'none' } as React.CSSProperties}
       >
-        <div className="flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
-          <span>{game.opening_name || game.eco || 'Unknown opening'}</span>
+        <Link
+          to={backTo}
+          className="inline-flex items-center gap-1 hover:text-indigo-400 transition-colors whitespace-nowrap"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          ← Back
+        </Link>
+        <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
+        <div className="flex items-center gap-2 flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>
+          <span className="truncate">{game.opening_name || game.eco || 'Unknown opening'}</span>
           <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
-          <span>{game.time_class} {game.time_control}</span>
+          <span className="whitespace-nowrap">{game.time_class} {game.time_control}</span>
           <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
-          <span>{new Date(game.played_at).toLocaleDateString()}</span>
+          <span className="whitespace-nowrap">{new Date(game.played_at).toLocaleDateString()}</span>
         </div>
-        <span className={`px-2 py-0.5 rounded text-sm font-medium ${
+        <span className={`px-2 py-0.5 rounded text-sm font-medium whitespace-nowrap ${
           game.user_result === 'win' ? 'bg-green-900/50 text-green-400'
           : game.user_result === 'loss' ? 'bg-red-900/50 text-red-400'
           : 'bg-gray-700/50 text-gray-400'
@@ -366,21 +379,19 @@ export default function GameReview() {
         </span>
       </div>
 
-      {/*
-        Cap the grid row's height so the right column's move list can't push
-        the layout past the chart's bottom. Both columns inherit this height
-        via the default `align-items: stretch`, which lets the right column's
-        `flex-1 min-h-0` move list grab exactly the remaining space under
-        the cards. Board uses max-h-full so aspect-square scales down if the
-        viewport is shorter than the natural ~820px layout.
-      */}
       {/* Left grid column is pinned to (boardSize + 26) on lg+ via the
           --board-col CSS variable: that's exactly eval-bar (22) + gap-1 (4) +
           board, so the right column hugs the board with just the gap-4 (16px)
           between them. Falls back to 1fr until boardSize is measured, and the
-          mobile single-column layout is unaffected (grid-cols-1 still wins). */}
+          mobile single-column layout is unaffected (grid-cols-1 still wins).
+          flex-1 min-h-0 lets the grid claim the remaining viewport height.
+          grid-rows-1 (= minmax(0, 1fr)) makes the single row fill that height
+          rather than auto-sizing to right-column content — which is what
+          enables the move list's flex-1 + overflow-y-auto to scroll inside
+          a bounded right column. */}
       <div
-        className="grid grid-cols-1 lg:grid-cols-[var(--board-col)_340px] gap-4 lg:h-[calc(100vh-180px)]"
+        ref={setGridEl}
+        className="grid grid-cols-1 lg:grid-cols-[var(--board-col)_340px] gap-4 lg:flex-1 lg:min-h-0 lg:grid-rows-1"
         style={{ '--board-col': boardSize > 0 ? `${boardSize + 26}px` : '1fr' } as React.CSSProperties}
       >
         {/* Left: board + nav + eval graph. Player strips moved to the right
@@ -389,15 +400,14 @@ export default function GameReview() {
           <div className="flex gap-1 flex-1 min-h-0 justify-start">
             <EvalBar cp={currentMove?.eval_after_cp ?? null} flipped={boardOrientation === 'black'} />
 
-            {/* Board slot: outer ref measures the available square; inner div
-                is sized to the nearest multiple of 8 pixels so the
-                chessboard's 1fr×8 grid never falls on a sub-pixel boundary
-                (which produces white hairline gaps between squares).
-                `justify-start` sits the board flush against the eval bar
-                instead of centering it — eliminates the wasted gap on the
-                left. The remaining horizontal slack ends up on the right. */}
+            {/* Board slot: inner div is sized to the nearest multiple of 8
+                pixels so the chessboard's 1fr×8 grid never falls on a
+                sub-pixel boundary (which produces white hairline gaps between
+                squares). `justify-start` sits the board flush against the
+                eval bar; sizing is computed from the parent grid container
+                (see boardSize effect above) so the slot itself doesn't have
+                to be measured. */}
             <div
-              ref={setBoardSlot}
               className="flex-1 max-w-[920px] flex items-center justify-start"
               style={{ height: '100%', minHeight: 0 }}
             >
@@ -437,7 +447,7 @@ export default function GameReview() {
             className="rounded-lg mt-1 relative overflow-hidden focus:outline-none [&_*]:focus:outline-none [&_*]:outline-none"
             tabIndex={-1}
             style={{
-              height: 100,
+              height: 80,
               background: '#475569',
               width: boardSize > 0 ? boardSize + 26 : '100%',
             }}

@@ -1,13 +1,12 @@
-import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { BookOpen, Clock, Crown, Hourglass, List, Sparkles, Target, Trophy, Zap, type LucideIcon } from 'lucide-react'
 import {
   getPlayer, listGames, startImport, getImportStatus,
   getAccuracyTrend,
-  type TimeRange,
 } from '../api/client'
 import { setStoredPlayer, setStoredImport, getStoredImport } from '../lib/storage'
+import { useTimeRange } from '../lib/useTimeRange'
 import { colorIcon, resultIcon, resultLabel } from '../lib/format'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
@@ -15,7 +14,7 @@ import { CPL_EXPLANATION } from '../lib/explanations'
 
 export default function PlayerDashboard() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
 
   const activeImportRunning = !!getStoredImport()
 

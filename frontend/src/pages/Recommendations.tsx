@@ -5,11 +5,11 @@ import {
   getRecommendations,
   type Recommendation,
   type RecommendationAction,
-  type TimeRange,
 } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
+import { useTimeRange } from '../lib/useTimeRange'
 
 const KIND_LABELS: Record<Recommendation['kind'], string> = {
   opening_leak: 'Opening',
@@ -61,7 +61,7 @@ function formatBucketLocal(utcStartHour: number, bucketHours: number): string {
 
 export default function Recommendations() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const query = useQuery({

@@ -4,18 +4,19 @@ import { useQuery } from '@tanstack/react-query'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { getTimePressure, type TimeRange } from '../api/client'
+import { getTimePressure } from '../api/client'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
 import QueryError from '../components/QueryError'
 import { CPL_EXPLANATION } from '../lib/explanations'
+import { useTimeRange } from '../lib/useTimeRange'
 
 const TIME_CLASSES = ['bullet', 'blitz', 'rapid', 'classical']
 
 export default function TimePressure() {
   const { id } = useParams<{ id: string }>()
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
   const [timeClass, setTimeClass] = useState<string>('blitz')
 
   const query = useQuery({

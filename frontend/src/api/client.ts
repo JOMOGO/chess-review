@@ -96,6 +96,11 @@ export function getPhasePerformance(playerId: string, range?: TimeRange) {
   return request<PhasePerformance[]>(`/players/${playerId}/insights/phase-performance${qs}`);
 }
 
+export function getPhaseExamples(playerId: string, phase: string, limit = 20, range?: TimeRange) {
+  const qs = buildQs(`limit=${limit}`, rangeQs(range));
+  return request<PhaseExample[]>(`/players/${playerId}/insights/phase-performance/${phase}${qs}`);
+}
+
 export function getTimePressure(playerId: string, timeClass = 'blitz', range?: TimeRange) {
   const qs = buildQs(`time_class=${timeClass}`, rangeQs(range));
   return request<TimePressureBucket[]>(`/players/${playerId}/insights/time-pressure${qs}`);
@@ -296,6 +301,20 @@ export interface PhasePerformance {
   blunder_rate: number;
   mistake_rate: number;
   inaccuracy_rate: number;
+  opponent_sample_size: number;
+  opponent_avg_cpl: number;
+}
+
+export interface PhaseExample {
+  game_id: string;
+  move_id: string;
+  ply: number;
+  san: string;
+  classification: string | null;
+  cp_loss: number | null;
+  opening_name: string | null;
+  user_result: string;
+  played_at: string;
 }
 
 export interface TimePressureBucket {

@@ -11,7 +11,7 @@ from chess_review.analytics.endgames import get_endgame_examples, get_endgame_su
 from chess_review.analytics.motifs import get_motif_examples, get_motif_summary
 from chess_review.analytics.opening_tree import build_opening_tree
 from chess_review.analytics.openings_winrate import get_opening_stats
-from chess_review.analytics.phase_split import get_phase_performance
+from chess_review.analytics.phase_split import get_phase_examples, get_phase_performance
 from chess_review.analytics.rating_performance import get_rating_performance
 from chess_review.analytics.recommendations import get_recommendations
 from chess_review.analytics.time_pressure import get_time_pressure
@@ -73,6 +73,20 @@ async def phase_performance(
 ) -> list[dict]:
     return await get_phase_performance(
         session, player_id, _resolve_since(range, since),
+    )
+
+
+@router.get("/phase-performance/{phase}")
+async def phase_examples(
+    player_id: uuid.UUID,
+    phase: str,
+    limit: int = 20,
+    range: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    return await get_phase_examples(
+        session, player_id, phase, limit=limit,
+        since=_resolve_since(range, None),
     )
 
 

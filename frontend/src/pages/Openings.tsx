@@ -1,10 +1,9 @@
-import { useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import BackButton from '../components/BackButton'
 import TimeRangeFilter from '../components/TimeRangeFilter'
 import InfoTip from '../components/InfoTip'
 import { CPL_EXPLANATION } from '../lib/explanations'
-import type { TimeRange } from '../api/client'
+import { useTimeRange } from '../lib/useTimeRange'
 import OpeningStats from './OpeningStats'
 import OpeningTree from './OpeningTree'
 
@@ -27,7 +26,7 @@ export default function Openings() {
     next.set('view', v)
     setParams(next, { replace: true })
   }
-  const [range, setRange] = useState<TimeRange>('all')
+  const [range, setRange] = useTimeRange()
 
   if (!id) return null
 
