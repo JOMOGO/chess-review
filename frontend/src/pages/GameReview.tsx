@@ -57,6 +57,12 @@ export default function GameReview() {
     const p = Number.parseInt(searchParams.get('ply') ?? '', 10)
     return Number.isFinite(p) && p > 0 ? p : 0
   })
+  // Hover cursor on the eval chart. We track this ourselves (rounded to the
+  // nearest real ply) instead of letting Recharts' Tooltip draw one, because
+  // its default cursor snaps to the nearest data point — which now includes
+  // synthetic zero-crossing rows at fractional plys, producing a second
+  // vertical line whenever the user hovered over a sign flip.
+  const [hoverPly, setHoverPly] = useState<number | null>(null)
 
   // Determine back destination
   const backTo = location.state?.from || '/'
@@ -94,14 +100,47 @@ export default function GameReview() {
 
   const evalData = useMemo(() => {
     if (!game) return []
-    return game.moves.map((m, i) => {
-      const ev = m.eval_after_cp != null ? Math.max(-5, Math.min(5, m.eval_after_cp / 100)) : null
-      return { ply: i + 1, eval: ev }
-    })
+    // Build raw eval points, then walk pair-by-pair inserting a synthetic
+    // zero-crossing whenever the eval flips sign. Each resulting point carries
+    // three keys — eval (the real curve), evalWhite (clamped to >=0, fed to the
+    // white fill area), evalBlack (clamped to <=0, fed to the dark fill area).
+    // Because the synthetic point sits at exactly (ply, 0) in all three series,
+    // both fill polygons close cleanly at the zero line where the curve crosses
+    // it; no SVG gradient or clip-path tricks needed.
+    const raw = game.moves.map((m, i) => ({
+      ply: i + 1,
+      eval: m.eval_after_cp != null
+        ? Math.max(-5, Math.min(5, m.eval_after_cp / 100))
+        : null,
+    }))
+    type Row = { ply: number; eval: number | null; evalWhite: number | null; evalBlack: number | null }
+    const out: Row[] = []
+    for (let i = 0; i < raw.length; i++) {
+      const curr = raw[i]
+      if (i > 0) {
+        const prev = raw[i - 1]
+        if (prev.eval != null && curr.eval != null &&
+            ((prev.eval > 0 && curr.eval < 0) || (prev.eval < 0 && curr.eval > 0))) {
+          const t = prev.eval / (prev.eval - curr.eval)
+          const crossPly = prev.ply + t * (curr.ply - prev.ply)
+          out.push({ ply: crossPly, eval: 0, evalWhite: 0, evalBlack: 0 })
+        }
+      }
+      out.push({
+        ply: curr.ply,
+        eval: curr.eval,
+        evalWhite: curr.eval != null ? Math.max(0, curr.eval) : null,
+        evalBlack: curr.eval != null ? Math.min(0, curr.eval) : null,
+      })
+    }
+    return out
   }, [game])
 
   // Phase bands for the chart background. Group consecutive plies sharing a
   // phase so each band is one <ReferenceArea> rather than per-ply slivers.
+  // Then close the 1-ply gap between adjacent bands by extending each one to
+  // the midpoint with its neighbor, so the colors meet 50/50 across the
+  // transition instead of leaving a strip of bare background.
   const phaseBands = useMemo(() => {
     if (!game) return []
     const bands: { from: number; to: number; phase: string }[] = []
@@ -117,6 +156,11 @@ export default function GameReview() {
       }
     })
     if (current) bands.push(current)
+    for (let i = 0; i < bands.length - 1; i++) {
+      const mid = (bands[i].to + bands[i + 1].from) / 2
+      bands[i].to = mid
+      bands[i + 1].from = mid
+    }
     return bands
   }, [game])
 
@@ -138,45 +182,75 @@ export default function GameReview() {
       }))
   }, [game])
 
+  // Lichess accuracy. The previous implementation diverged in three ways that
+  // collectively over-rated games by ~10 points: volatility weights were
+  // computed from the spread of *accuracy* values (which cluster near 100), not
+  // from the spread of win-percent values across the whole game; window/weight
+  // had no upper cap; and the final result was a plain weighted mean instead
+  // of being averaged with the harmonic mean (which punishes a single blunder
+  // much harder than the arithmetic mean does).
   const accuracy = useMemo(() => {
     if (!game) return null
-    const userMoves = game.moves.filter(
-      (m) => m.is_user_move && m.eval_before_cp != null && m.eval_after_cp != null,
-    )
-    if (userMoves.length === 0) return null
     const clamp = (cp: number) => Math.max(-1000, Math.min(1000, cp))
     const winPercent = (cp: number) =>
       50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1)
-    const perMove = userMoves.map((m) => {
-      const cb = clamp(m.eval_before_cp!)
-      const ca = clamp(m.eval_after_cp!)
-      const moverIsWhite = m.ply % 2 === 1
-      const wpB = moverIsWhite ? winPercent(cb) : 100 - winPercent(cb)
-      const wpA = moverIsWhite ? winPercent(ca) : 100 - winPercent(ca)
-      const drop = Math.max(0, wpB - wpA)
-      const a = 103.1668 * Math.exp(-0.04354 * drop) - 3.1668
-      return Math.max(0, Math.min(100, a))
-    })
-    // Lichess-style volatility-weighted mean: moves near blunders count more
-    // than moves in quiet stretches, so a single missed mate isn't diluted
-    // away by 30 calm developing moves.
-    const n = perMove.length
-    if (n === 1) return Math.round(perMove[0] * 10) / 10
-    const window = Math.max(2, Math.ceil(n / 10))
-    let total = 0
-    let weightSum = 0
-    for (let i = 0; i < n; i++) {
-      const lo = Math.max(0, i - window)
-      const hi = Math.min(n, i + window + 1)
-      const slice = perMove.slice(lo, hi)
+
+    // White-POV win percent for every position (start + after each move).
+    const wp: number[] = []
+    const firstBefore = game.moves.find((m) => m.eval_before_cp != null)
+    if (firstBefore?.eval_before_cp != null) {
+      wp.push(winPercent(clamp(firstBefore.eval_before_cp)))
+    }
+    for (const m of game.moves) {
+      if (m.eval_after_cp != null) wp.push(winPercent(clamp(m.eval_after_cp)))
+      else if (wp.length > 0) wp.push(wp[wp.length - 1])
+    }
+    if (wp.length < 2) return null
+
+    // Sliding-window volatility weights (clamped 2..8, 0.5..12 per Lichess).
+    const windowSize = Math.max(2, Math.min(8, Math.ceil(wp.length / 10)))
+    const weights: number[] = []
+    for (let i = 0; i < wp.length; i++) {
+      const slice = wp.slice(i, Math.min(wp.length, i + windowSize))
       const mean = slice.reduce((s, v) => s + v, 0) / slice.length
       const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / slice.length
-      const w = Math.max(0.5, Math.sqrt(variance))
-      total += perMove[i] * w
-      weightSum += w
+      weights.push(Math.max(0.5, Math.min(12, Math.sqrt(variance))))
     }
-    const acc = total / weightSum
-    return Math.round(acc * 10) / 10
+
+    // Per-move user accuracy, paired with the weight at the position the move
+    // was played from. wpIdx tracks which position in wp corresponds to the
+    // state *before* each move (i.e. the move's starting position).
+    const accs: number[] = []
+    const accWeights: number[] = []
+    let wpIdx = 0
+    for (const m of game.moves) {
+      const here = wpIdx
+      wpIdx++
+      if (!m.is_user_move) continue
+      if (m.eval_before_cp == null || m.eval_after_cp == null) continue
+      const wpB = winPercent(clamp(m.eval_before_cp))
+      const wpA = winPercent(clamp(m.eval_after_cp))
+      const moverIsWhite = m.ply % 2 === 1
+      const drop = moverIsWhite ? Math.max(0, wpB - wpA) : Math.max(0, wpA - wpB)
+      const a = Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * drop) - 3.1668))
+      accs.push(a)
+      accWeights.push(weights[Math.min(here, weights.length - 1)] ?? 0.5)
+    }
+
+    if (accs.length === 0) return null
+    if (accs.length === 1) return Math.round(accs[0] * 10) / 10
+
+    let weightedSum = 0
+    let totalWeight = 0
+    for (let i = 0; i < accs.length; i++) {
+      weightedSum += accs[i] * accWeights[i]
+      totalWeight += accWeights[i]
+    }
+    const weightedMean = weightedSum / totalWeight
+    const harmonicMean = accs.length /
+      accs.reduce((s, a) => s + 1 / Math.max(1, a), 0)
+
+    return Math.round(((weightedMean + harmonicMean) / 2) * 10) / 10
   }, [game])
 
   const classCounts = useMemo(() => {
@@ -268,8 +342,14 @@ export default function GameReview() {
       <BackButton to={backTo} label="Back" />
 
       {/* Game meta header — kept compact so the grid row below it claims more
-          of the viewport (player names live in the right-column strips). */}
-      <div className="bg-[#16162a] border border-gray-700 rounded-lg px-3 py-1.5 mb-2 flex items-center justify-between text-sm">
+          of the viewport (player names live in the right-column strips).
+          Width capped on lg+ to (boardSize + 26 left col + 16 gap + 340 right
+          col) so its right edge lands on the move-list's right edge instead of
+          stretching to the full max-w-7xl page width. */}
+      <div
+        className="bg-[#16162a] border border-gray-700 rounded-lg px-3 py-1.5 mb-2 flex items-center justify-between text-sm lg:max-w-[var(--top-bar-w)]"
+        style={{ '--top-bar-w': boardSize > 0 ? `${boardSize + 382}px` : 'none' } as React.CSSProperties}
+      >
         <div className="flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
           <span>{game.opening_name || game.eco || 'Unknown opening'}</span>
           <span style={{ color: 'var(--text-muted)' }}>&middot;</span>
@@ -294,7 +374,15 @@ export default function GameReview() {
         the cards. Board uses max-h-full so aspect-square scales down if the
         viewport is shorter than the natural ~820px layout.
       */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 lg:h-[calc(100vh-180px)]">
+      {/* Left grid column is pinned to (boardSize + 26) on lg+ via the
+          --board-col CSS variable: that's exactly eval-bar (22) + gap-1 (4) +
+          board, so the right column hugs the board with just the gap-4 (16px)
+          between them. Falls back to 1fr until boardSize is measured, and the
+          mobile single-column layout is unaffected (grid-cols-1 still wins). */}
+      <div
+        className="grid grid-cols-1 lg:grid-cols-[var(--board-col)_340px] gap-4 lg:h-[calc(100vh-180px)]"
+        style={{ '--board-col': boardSize > 0 ? `${boardSize + 26}px` : '1fr' } as React.CSSProperties}
+      >
         {/* Left: board + nav + eval graph. Player strips moved to the right
             column so the board can claim the full vertical space here. */}
         <div className="flex flex-col min-h-0">
@@ -337,30 +425,32 @@ export default function GameReview() {
             <NavBtn onClick={() => setCurrentPly(positions.length - 1)} label="⟩⟩" title="Jump to end" />
           </div>
 
-          {/* Eval graph */}
+          {/* Eval graph — width pinned to (eval-bar 22 + gap-1 4 + boardSize)
+              so its left edge lines up with the eval bar above and its right
+              edge stops at the board's right edge. No internal padding so the
+              plot area fills the row edge-to-edge (plus the chart's own 4px
+              margin, which keeps the leftmost/rightmost dots from clipping). */}
           <div
             // Suppress the black focus ring that browsers draw on the chart's
             // internal SVG / surface after a click. The chart is purely a
             // visual surface; we don't want a keyboard-focus indicator.
-            className="border border-gray-700 rounded-lg p-2 mt-1 relative focus:outline-none [&_*]:focus:outline-none [&_*]:outline-none"
+            className="rounded-lg mt-1 relative overflow-hidden focus:outline-none [&_*]:focus:outline-none [&_*]:outline-none"
             tabIndex={-1}
-            style={{ height: 100, background: '#475569' }}
+            style={{
+              height: 100,
+              background: '#475569',
+              width: boardSize > 0 ? boardSize + 26 : '100%',
+            }}
           >
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={evalData} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}
                 onClick={(e) => {
-                  if (e?.activeLabel != null) setCurrentPly(Number(e.activeLabel))
-                }}>
-                <defs>
-                  {/* Vertical gradient hard-stopping at the zero line so the
-                      area renders solid white above 0 and solid dark below 0.
-                      One area = one stroke, so there's no opposing-side trace
-                      bleeding across the midline. */}
-                  <linearGradient id="evalSplit" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="50%" stopColor="#f8fafc" stopOpacity={1} />
-                    <stop offset="50%" stopColor="#020617" stopOpacity={1} />
-                  </linearGradient>
-                </defs>
+                  if (e?.activeLabel != null) setCurrentPly(Math.round(Number(e.activeLabel)))
+                }}
+                onMouseMove={(e) => {
+                  if (e?.activeLabel != null) setHoverPly(Math.round(Number(e.activeLabel)))
+                }}
+                onMouseLeave={() => setHoverPly(null)}>
                 {/* Phase bands sit behind everything else */}
                 {phaseBands.map((b, i) => (
                   <ReferenceArea
@@ -375,23 +465,62 @@ export default function GameReview() {
                     ifOverflow="hidden"
                   />
                 ))}
-                <XAxis dataKey="ply" type="number" domain={[1, Math.max(1, evalData.length)]} hide />
+                {/* Domain bounded by the real move count, NOT evalData.length —
+                    the array now also contains synthetic zero-crossing rows
+                    at fractional plys, so evalData.length overshoots the last
+                    move and leaves blank space on the right of the chart. */}
+                <XAxis dataKey="ply" type="number" domain={[1, Math.max(1, game.moves.length)]} hide />
                 <YAxis domain={[-5, 5]} hide />
                 <ReferenceLine y={0} stroke="#e2e8f0" strokeWidth={1} strokeOpacity={0.5} />
-                {/* Single eval area: fill gradient splits at zero line */}
+                {/* Three Areas sharing the same data array (which now contains
+                    synthetic (ply, 0) points at every zero crossing): two
+                    solid fills clamped to their half of the y-axis, one
+                    stroke-only Area for the real curve. type="linear" so each
+                    fill polygon's edges go straight between data points —
+                    monotone splines could undershoot the synthetic zero
+                    anchors and bleed across the zero line. */}
                 <Area
-                  type="monotone"
+                  type="linear"
+                  dataKey="evalWhite"
+                  stroke="none"
+                  fill="#f8fafc"
+                  fillOpacity={1}
+                  isAnimationActive={false}
+                  baseValue={0}
+                  dot={false}
+                  activeDot={false}
+                  connectNulls
+                />
+                <Area
+                  type="linear"
+                  dataKey="evalBlack"
+                  stroke="none"
+                  fill="#020617"
+                  fillOpacity={1}
+                  isAnimationActive={false}
+                  baseValue={0}
+                  dot={false}
+                  activeDot={false}
+                  connectNulls
+                />
+                <Area
+                  type="linear"
                   dataKey="eval"
                   stroke="#94a3b8"
                   strokeWidth={1.5}
-                  fill="url(#evalSplit)"
-                  fillOpacity={1}
+                  fill="none"
                   isAnimationActive={false}
                   baseValue={0}
                   dot={false}
                   activeDot={{ r: 0, fill: 'transparent', stroke: 'transparent' }}
                   connectNulls
                 />
+                {/* Hover cursor — only when it would land on a different
+                    integer ply than the selected one, so we never stack two
+                    lines on the same ply. */}
+                {hoverPly != null && hoverPly !== currentPly && hoverPly >= 1 && (
+                  <ReferenceLine x={hoverPly} stroke="#818cf8" strokeWidth={1} strokeOpacity={0.5} ifOverflow="hidden" />
+                )}
                 {/* Current-ply cursor */}
                 {currentPly >= 1 && (
                   <ReferenceLine x={currentPly} stroke="#818cf8" strokeWidth={1.5} ifOverflow="hidden" />
@@ -409,11 +538,13 @@ export default function GameReview() {
                     ifOverflow="visible"
                   />
                 ))}
-                {/* Hover cursor only — popup card is suppressed */}
+                {/* Tooltip kept only so AreaChart fires mouse events; cursor
+                    and popup are both suppressed — the hover line above is
+                    ours so it can snap to integer plys. */}
                 <Tooltip
                   isAnimationActive={false}
                   wrapperStyle={{ display: 'none' }}
-                  cursor={{ stroke: '#818cf8', strokeWidth: 1, fill: 'transparent' }}
+                  cursor={false}
                   content={() => null}
                 />
               </AreaChart>

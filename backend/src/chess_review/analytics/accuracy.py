@@ -51,48 +51,76 @@ def _clamp_eval_cp(cp: int | None) -> float:
     return float(max(-1000, min(1000, cp)))
 
 
-def _weighted_game_accuracy(per_move: list[float]) -> float:
-    """Lichess-style game accuracy: weighted mean of per-move accuracies where
-    each move's weight is the standard deviation of accuracy in a window
-    around it.
+def _lichess_accuracy(
+    win_pcts: list[float],
+    user_accuracies: list[tuple[int, float]],
+) -> float:
+    """Lichess game accuracy.
 
-    Quiet stretches get tiny weights; moves near blunders get large ones, so a
-    single missed mate doesn't get diluted by 30 calm developing moves.
-
-    Window size: max(2, ceil(N/10)). Min weight 0.5 to avoid divide-by-zero in
-    pathologically flat games.
+    Volatility weights are the sliding-window stdev of win-percent across all
+    positions (not just user moves). Window size and weight are clamped to
+    Lichess's bounds (2..8 and 0.5..12). The final result is the arithmetic
+    mean of (a) the weight-paired arithmetic mean of user-move accuracies and
+    (b) their harmonic mean, which punishes a single blunder harder than the
+    arithmetic mean alone does.
     """
-    n = len(per_move)
-    if n == 0:
+    if len(user_accuracies) == 0:
         return 0.0
-    if n == 1:
-        return per_move[0]
-    window = max(2, math.ceil(n / 10))
-    total = 0.0
-    weight_sum = 0.0
-    for i, acc in enumerate(per_move):
-        lo = max(0, i - window)
-        hi = min(n, i + window + 1)
-        slice_ = per_move[lo:hi]
+    if len(user_accuracies) == 1:
+        return user_accuracies[0][1]
+    if len(win_pcts) < 2:
+        return sum(a for _, a in user_accuracies) / len(user_accuracies)
+
+    window = max(2, min(8, math.ceil(len(win_pcts) / 10)))
+    weights: list[float] = []
+    for i in range(len(win_pcts)):
+        slice_ = win_pcts[i : min(len(win_pcts), i + window)]
         mean = sum(slice_) / len(slice_)
-        var = sum((a - mean) ** 2 for a in slice_) / len(slice_)
-        w = max(0.5, math.sqrt(var))
-        total += acc * w
-        weight_sum += w
-    return total / weight_sum
+        var = sum((v - mean) ** 2 for v in slice_) / len(slice_)
+        weights.append(max(0.5, min(12.0, math.sqrt(var))))
+
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for pos_idx, acc in user_accuracies:
+        w = weights[min(pos_idx, len(weights) - 1)]
+        weighted_sum += acc * w
+        total_weight += w
+    weighted_mean = weighted_sum / total_weight
+
+    accs = [a for _, a in user_accuracies]
+    harmonic_mean = len(accs) / sum(1.0 / max(1.0, a) for a in accs)
+
+    return (weighted_mean + harmonic_mean) / 2
 
 
 def compute_game_accuracy(moves: list[GameMove]) -> tuple[float, float, int]:
     """Compute accuracy %, avg CPL, and user-move count for one game.
 
-    Accuracy = Lichess-style volatility-weighted mean of per-move accuracies
-    on user moves with both evals set. Calm moves get tiny weights so a single
-    blunder isn't diluted away.
+    Accuracy is computed with Lichess's full formula: volatility-weighted mean
+    of per-move user-side accuracies, averaged with the harmonic mean so a
+    single blunder isn't diluted by surrounding calm play.
     Avg CPL = mean of cp_loss across user moves (still useful as a raw metric).
     """
-    accuracies: list[float] = []
-    cpl_values: list[int] = []
+    # White-POV win percent for every position (start + after each move).
+    win_pcts: list[float] = []
+    first_before = next(
+        (m for m in moves if m.eval_before_cp is not None),
+        None,
+    )
+    if first_before is not None and first_before.eval_before_cp is not None:
+        win_pcts.append(_win_percent(_clamp_eval_cp(first_before.eval_before_cp)))
     for m in moves:
+        if m.eval_after_cp is not None:
+            win_pcts.append(_win_percent(_clamp_eval_cp(m.eval_after_cp)))
+        elif win_pcts:
+            win_pcts.append(win_pcts[-1])
+
+    user_accs: list[tuple[int, float]] = []
+    cpl_values: list[int] = []
+    wp_idx = 0
+    for m in moves:
+        here = wp_idx
+        wp_idx += 1
         if not m.is_user_move:
             continue
         if m.eval_before_cp is None or m.eval_after_cp is None:
@@ -100,15 +128,15 @@ def compute_game_accuracy(moves: list[GameMove]) -> tuple[float, float, int]:
         cb = _clamp_eval_cp(m.eval_before_cp)
         ca = _clamp_eval_cp(m.eval_after_cp)
         mover_is_white = m.ply % 2 == 1
-        accuracies.append(_move_accuracy(cb, ca, mover_is_white))
+        user_accs.append((here, _move_accuracy(cb, ca, mover_is_white)))
         if m.cp_loss is not None:
             cpl_values.append(min(m.cp_loss, 1000))
 
-    if not accuracies:
+    if not user_accs:
         return 0.0, 0.0, 0
-    avg_acc = round(_weighted_game_accuracy(accuracies), 1)
+    avg_acc = round(_lichess_accuracy(win_pcts, user_accs), 1)
     avg_cpl = round(sum(cpl_values) / len(cpl_values), 1) if cpl_values else 0.0
-    return avg_acc, avg_cpl, len(accuracies)
+    return avg_acc, avg_cpl, len(user_accs)
 
 
 async def get_game_accuracy(

@@ -53,11 +53,19 @@ class LichessTablebaseClient:
             if not category:
                 return None
 
-            # Convert tablebase result to centipawns
+            # Convert tablebase result to centipawns.
+            # category and dtm are from the SIDE-TO-MOVE's perspective per the
+            # Lichess tablebase API, but every other eval in this codebase
+            # (Stockfish via pov.white(), Lichess cloud, GameMove.eval_*_cp) is
+            # white-POV. We flip the sign here for black-to-move positions so
+            # downstream eval_to_cp and the eval bar read consistently.
             # category: "win", "maybe-win", "cursed-win", "draw",
             #           "blessed-loss", "maybe-loss", "loss"
-            dtm = data.get("dtm")  # distance to mate (signed)
+            dtm = data.get("dtm")  # distance to mate (signed, stm POV)
+            white_to_move = chess.Board(fen).turn
 
+            eval_cp: int | None
+            eval_mate: int | None
             if category in ("win", "maybe-win", "cursed-win"):
                 eval_mate = dtm if dtm else 1
                 eval_cp = None
@@ -67,6 +75,8 @@ class LichessTablebaseClient:
             else:  # draw
                 eval_cp = 0
                 eval_mate = None
+            if eval_mate is not None and not white_to_move:
+                eval_mate = -eval_mate
 
             # Best move
             moves = data.get("moves", [])
