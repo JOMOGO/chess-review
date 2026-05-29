@@ -25,7 +25,7 @@ export default function TimeRangeFilter({
             onClick={() => onChange(opt.value)}
             className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
               active
-                ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
+                ? 'range-pill-active bg-indigo-600/30 border-indigo-500 text-indigo-200'
                 : 'border-transparent hover:border-current'
             }`}
             style={

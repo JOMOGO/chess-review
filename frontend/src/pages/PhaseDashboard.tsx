@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -32,6 +31,11 @@ const PHASE_LABEL: Record<string, string> = {
 // is noisy (one game with a wild opponent skews the average).
 const DELTA_MIN_SAMPLE = 30
 
+// Cap examples per column so the three side-by-side lists stay readable on a
+// laptop viewport. 12 is enough to spot a pattern; the GameReview deep-link
+// gets users into the full game when they want more.
+const EXAMPLES_PER_PHASE = 12
+
 function deltaColor(delta: number): string {
   // Positive delta = user CPL > opponent CPL = relatively weaker. Red.
   // Negative delta = user CPL < opponent CPL = relatively stronger. Green.
@@ -45,7 +49,6 @@ function deltaColor(delta: number): string {
 export default function PhaseDashboard() {
   const { id } = useParams<{ id: string }>()
   const [range, setRange] = useTimeRange()
-  const [expanded, setExpanded] = useState<string | null>(null)
 
   const query = useQuery({
     queryKey: ['phasePerformance', id, range],
@@ -85,15 +88,13 @@ export default function PhaseDashboard() {
           No data yet. Import and analyze games first.
         </p>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
           {data.map((d) => (
-            <PhaseRow
+            <PhaseColumn
               key={d.phase}
               row={d}
               playerId={id!}
               range={range}
-              expanded={expanded === d.phase}
-              onToggle={() => setExpanded(expanded === d.phase ? null : d.phase)}
             />
           ))}
         </div>
@@ -102,19 +103,17 @@ export default function PhaseDashboard() {
   )
 }
 
-function PhaseRow({
-  row, playerId, range, expanded, onToggle,
+function PhaseColumn({
+  row, playerId, range,
 }: {
   row: PhasePerformance
   playerId: string
   range: TimeRange
-  expanded: boolean
-  onToggle: () => void
 }) {
   const examplesQuery = useQuery({
     queryKey: ['phaseExamples', playerId, row.phase, range],
-    queryFn: () => getPhaseExamples(playerId, row.phase, 20, range),
-    enabled: expanded,
+    queryFn: () => getPhaseExamples(playerId, row.phase, EXAMPLES_PER_PHASE, range),
+    enabled: !!playerId,
   })
 
   const delta = row.avg_cpl - row.opponent_avg_cpl
@@ -123,122 +122,117 @@ function PhaseRow({
 
   return (
     <div
-      className="rounded-lg border"
+      className="rounded-lg border p-4 flex flex-col gap-3"
       style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
     >
-      <button
-        onClick={onToggle}
-        className="w-full text-left p-4 transition-colors hover:bg-white/[0.02]"
-      >
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-1.5 min-w-[120px]">
-            <span
-              className="text-lg font-semibold capitalize"
-              style={{ color: 'var(--text-primary)' }}
-            >
-              {PHASE_LABEL[row.phase] ?? row.phase}
-            </span>
-            <InfoTip label={`What is the ${row.phase}?`}>
-              {PHASE_DESCRIPTIONS[row.phase] ??
-                'A segment of the game classified by move number and remaining material.'}
-            </InfoTip>
-          </div>
-
-          <Metric label="You" value={row.avg_cpl.toFixed(1)} suffix="cpl" color="#818cf8" />
-          <Metric label="Opp" value={row.opponent_avg_cpl.toFixed(1)} suffix="cpl" />
-          <Metric
-            label="Δ"
-            value={`${delta > 0 ? '+' : ''}${delta.toFixed(1)}`}
-            color={trustDelta ? deltaColor(delta) : 'var(--text-muted)'}
-            tip={
-              trustDelta
-                ? delta > 0
-                  ? 'You play this phase WORSE than your opponents on average — relative weakness.'
-                  : delta < 0
-                    ? 'You play this phase BETTER than your opponents on average — relative strength.'
-                    : 'You match your opponents in this phase.'
-                : `Too few opponent moves (${row.opponent_sample_size}) to trust the comparison — need ≥ ${DELTA_MIN_SAMPLE}.`
-            }
-          />
-
-          <div className="flex items-center gap-3 ml-auto text-xs" style={{ color: 'var(--text-secondary)' }}>
-            <ErrorRate label="Blunder" value={row.blunder_rate} color="#ef4444" />
-            <ErrorRate label="Mistake" value={row.mistake_rate} color="#f97316" />
-            <ErrorRate label="Inacc" value={row.inaccuracy_rate} color="#eab308" />
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {row.sample_size} moves
-            </span>
-            <span aria-hidden style={{ color: 'var(--text-muted)' }}>
-              {expanded ? '▾' : '▸'}
-            </span>
-          </div>
-        </div>
-      </button>
-
-      {expanded && (
-        <div
-          className="border-t px-4 pt-3 pb-4"
-          style={{ borderColor: 'var(--border)' }}
+      {/* Phase title */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className="text-lg font-semibold capitalize"
+          style={{ color: 'var(--text-primary)' }}
         >
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>
-            Worst moves in this phase
-          </div>
-          {examplesQuery.isLoading ? (
-            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading...</p>
-          ) : examples.length === 0 ? (
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              No mistakes worse than inaccuracy in this range.
-            </p>
-          ) : (
-            <div className="space-y-1.5">
-              {examples.map((ex) => (
-                <Link
-                  key={ex.move_id}
-                  to={`/games/${ex.game_id}?ply=${Math.max(0, ex.ply - 1)}`}
-                  state={{ from: `/players/${playerId}/phases` }}
-                  className="block rounded-md p-2.5 border hover:border-indigo-500 transition-colors"
-                  style={{ borderColor: 'var(--border)' }}
-                >
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="font-mono text-sm" style={{ color: 'var(--text-primary)' }}>
-                      {Math.floor((ex.ply + 1) / 2)}
-                      {ex.ply % 2 === 1 ? '.' : '...'} {ex.san}
-                    </span>
-                    {ex.classification && (
-                      <span
-                        className={`text-xs px-1.5 py-0.5 rounded ${
-                          ex.classification === 'blunder' || ex.classification === 'miss'
-                            ? 'bg-red-500/20 text-red-400'
-                            : ex.classification === 'mistake'
-                              ? 'bg-orange-500/20 text-orange-400'
-                              : 'bg-yellow-500/20 text-yellow-400'
-                        }`}
-                      >
-                        {ex.classification}
-                      </span>
-                    )}
-                    {ex.cp_loss != null && (
-                      <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                        -{(ex.cp_loss / 100).toFixed(2)}
-                      </span>
-                    )}
-                    <span className="text-xs truncate flex-1" style={{ color: 'var(--text-muted)' }}>
-                      {ex.opening_name ?? '?'}
-                    </span>
-                    <span className={`text-sm ${resultColor(ex.user_result)}`}>
-                      {resultIcon(ex.user_result)}
-                    </span>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {new Date(ex.played_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          )}
+          {PHASE_LABEL[row.phase] ?? row.phase}
+        </span>
+        <InfoTip label={`What is the ${row.phase}?`}>
+          {PHASE_DESCRIPTIONS[row.phase] ??
+            'A segment of the game classified by move number and remaining material.'}
+        </InfoTip>
+        <span className="ml-auto text-xs" style={{ color: 'var(--text-muted)' }}>
+          {row.sample_size} moves
+        </span>
+      </div>
+
+      {/* You / Opp / Δ row */}
+      <div className="flex items-baseline gap-4">
+        <Metric label="You" value={row.avg_cpl.toFixed(1)} suffix="cpl" color="#818cf8" />
+        <Metric label="Opp" value={row.opponent_avg_cpl.toFixed(1)} suffix="cpl" />
+        <Metric
+          label="Δ"
+          value={`${delta > 0 ? '+' : ''}${delta.toFixed(1)}`}
+          color={trustDelta ? deltaColor(delta) : 'var(--text-muted)'}
+          tip={
+            trustDelta
+              ? delta > 0
+                ? 'You play this phase WORSE than your opponents on average — relative weakness.'
+                : delta < 0
+                  ? 'You play this phase BETTER than your opponents on average — relative strength.'
+                  : 'You match your opponents in this phase.'
+              : `Too few opponent moves (${row.opponent_sample_size}) to trust the comparison — need ≥ ${DELTA_MIN_SAMPLE}.`
+          }
+        />
+      </div>
+
+      {/* Error rates */}
+      <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: 'var(--text-secondary)' }}>
+        <ErrorRate label="Blunder" value={row.blunder_rate} color="#ef4444" />
+        <ErrorRate label="Mistake" value={row.mistake_rate} color="#f97316" />
+        <ErrorRate label="Inacc" value={row.inaccuracy_rate} color="#eab308" />
+      </div>
+
+      {/* Worst moves — always-visible. Each item is a two-line compact card
+          so several fit per column without horizontal overflow. */}
+      <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>
+          Worst moves
         </div>
-      )}
+        {examplesQuery.isLoading ? (
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+        ) : examples.length === 0 ? (
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            No mistakes worse than inaccuracy in this range.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {examples.map((ex) => (
+              <ExampleCard key={ex.move_id} ex={ex} playerId={playerId} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
+  )
+}
+
+function ExampleCard({ ex, playerId }: { ex: PhaseExample; playerId: string }) {
+  return (
+    <Link
+      to={`/games/${ex.game_id}?ply=${Math.max(0, ex.ply - 1)}`}
+      state={{ from: `/players/${playerId}/phases` }}
+      className="block rounded-md px-2 py-1.5 border hover:border-indigo-500 transition-colors"
+      style={{ borderColor: 'var(--border)' }}
+    >
+      {/* Line 1: move + classification + cp loss */}
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-sm" style={{ color: 'var(--text-primary)' }}>
+          {Math.floor((ex.ply + 1) / 2)}
+          {ex.ply % 2 === 1 ? '.' : '...'} {ex.san}
+        </span>
+        {ex.classification && (
+          <span
+            className={`text-[10px] px-1 py-0.5 rounded ${
+              ex.classification === 'blunder' || ex.classification === 'miss'
+                ? 'bg-red-500/20 text-red-400'
+                : ex.classification === 'mistake'
+                  ? 'bg-orange-500/20 text-orange-400'
+                  : 'bg-yellow-500/20 text-yellow-400'
+            }`}
+          >
+            {ex.classification}
+          </span>
+        )}
+        {ex.cp_loss != null && (
+          <span className="text-[11px] font-mono ml-auto" style={{ color: 'var(--text-muted)' }}>
+            -{(ex.cp_loss / 100).toFixed(2)}
+          </span>
+        )}
+      </div>
+      {/* Line 2: opening + result + date */}
+      <div className="flex items-center gap-2 mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+        <span className="truncate flex-1">{ex.opening_name ?? '?'}</span>
+        <span className={resultColor(ex.user_result)}>{resultIcon(ex.user_result)}</span>
+        <span>{new Date(ex.played_at).toLocaleDateString()}</span>
+      </div>
+    </Link>
   )
 }
 
