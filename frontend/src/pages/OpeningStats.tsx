@@ -18,6 +18,11 @@ const MAX_LABEL_CHARS = 30
 const CHART_TOP_N = 12
 const GROUP_STORAGE_KEY = 'openingStats.groupMode'
 
+// Mirrors the Move Tree's "min games per branch" control. Default 2 so rare
+// lines aren't dropped, matching OpeningTree's default.
+const MIN_GAMES_OPTIONS = [1, 2, 5, 10] as const
+type MinGames = typeof MIN_GAMES_OPTIONS[number]
+
 type GroupMode = 'flat' | 'eco' | 'name'
 
 const ECO_FAMILY_LABELS: Record<string, string> = {
@@ -127,6 +132,7 @@ function buildEcoGroups(rows: OpeningStat[]): Array<{ key: string; label: string
 export default function OpeningStats({ playerId, range }: { playerId: string; range: TimeRange }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [minGames, setMinGames] = useState<MinGames>(2)
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const stored = localStorage.getItem(GROUP_STORAGE_KEY)
     return (stored === 'eco' || stored === 'name' || stored === 'flat') ? stored : 'flat'
@@ -137,8 +143,8 @@ export default function OpeningStats({ playerId, range }: { playerId: string; ra
   }, [groupMode])
 
   const query = useQuery({
-    queryKey: ['openingStats', playerId, range],
-    queryFn: () => getOpeningStats(playerId, 2, undefined, range),
+    queryKey: ['openingStats', playerId, range, minGames],
+    queryFn: () => getOpeningStats(playerId, minGames, undefined, range),
   })
 
   const trendQuery = useQuery({
@@ -187,15 +193,6 @@ export default function OpeningStats({ playerId, range }: { playerId: string; ra
     })
   }
 
-  if (sorted.length === 0) {
-    return (
-      <p style={{ color: 'var(--text-muted)' }}>
-        No openings to show yet. Either no analyzed games in this range, or chess.com
-        didn't tag the openings.
-      </p>
-    )
-  }
-
   return (
     <>
       <div className="flex items-center gap-3 mb-4 flex-wrap">
@@ -203,8 +200,35 @@ export default function OpeningStats({ playerId, range }: { playerId: string; ra
           Group
         </span>
         <GroupToggle value={groupMode} onChange={setGroupMode} />
+
+        <span className="text-xs uppercase tracking-wide ml-3" style={{ color: 'var(--text-muted)' }}>
+          Min games per branch
+        </span>
+        <div className="inline-flex rounded border overflow-hidden text-xs" style={{ borderColor: 'var(--border)' }}>
+          {MIN_GAMES_OPTIONS.map((n) => (
+            <button
+              key={n}
+              onClick={() => setMinGames(n)}
+              className={`px-2.5 py-1 transition-colors ${minGames === n ? 'font-semibold' : ''}`}
+              style={{
+                background: minGames === n ? 'var(--accent-bg, #4f46e5)' : 'transparent',
+                color: minGames === n ? 'white' : 'var(--text-secondary)',
+              }}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {sorted.length === 0 ? (
+        <p style={{ color: 'var(--text-muted)' }}>
+          {minGames > 1
+            ? `No openings with at least ${minGames} games in this range. Try lowering the threshold.`
+            : "No openings to show yet. Either no analyzed games in this range, or chess.com didn't tag the openings."}
+        </p>
+      ) : (
+      <>
       <div
         className="rounded-lg p-4 mb-6 border"
         style={{
@@ -308,6 +332,8 @@ export default function OpeningStats({ playerId, range }: { playerId: string; ra
               />
             ))}
       </div>
+      </>
+      )}
     </>
   )
 }
