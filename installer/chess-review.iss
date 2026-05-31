@@ -25,9 +25,13 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-; Detect a running instance / locked files on upgrade and offer to close them.
+; Detect a running instance / locked files on upgrade and close them via the
+; Windows Restart Manager, then relaunch afterwards. RestartApplications=yes is
+; what makes the in-app self-update seamless: the running app downloads this
+; installer, launches it /SILENT, gets closed here, and is reopened on the new
+; version once files are swapped (see backend/src/chess_review/updater.py).
 CloseApplications=yes
-RestartApplications=no
+RestartApplications=yes
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

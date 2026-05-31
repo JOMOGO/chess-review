@@ -12,6 +12,8 @@ from chess_review.schemas.api import (
     InsightTimePressure,
     OpeningTreeNode,
     PlayerOut,
+    UpdateCheckResponse,
+    UpdateInstallResponse,
 )
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "InsightTimePressure",
     "OpeningTreeNode",
     "PlayerOut",
+    "UpdateCheckResponse",
+    "UpdateInstallResponse",
 ]

@@ -188,6 +188,15 @@ export function getHealth() {
   return request<HealthStatus>('/health');
 }
 
+// Updates
+export function getUpdateCheck() {
+  return request<UpdateCheck>('/update-check');
+}
+
+export function installUpdate() {
+  return request<UpdateInstall>('/update/install', { method: 'POST' });
+}
+
 // Types
 export interface Player {
   id: string;
@@ -401,6 +410,23 @@ export interface HealthStatus {
   db: boolean;
   engine: string;
   queue: boolean;
+  version: string;
+}
+
+export interface UpdateCheck {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  release_url: string | null;
+  download_url: string | null;
+  can_self_install: boolean;
+}
+
+export interface UpdateInstall {
+  started: boolean;
+  download_url: string | null;
+  release_url: string | null;
+  detail: string;
 }
 
 export interface RecommendationAction {

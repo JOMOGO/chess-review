@@ -14,6 +14,7 @@ from chess_review.api.analysis import router as analysis_router
 from chess_review.api.games import router as games_router
 from chess_review.api.insights import router as insights_router
 from chess_review.api.players import router as players_router
+from chess_review.api.updates import router as updates_router
 from chess_review.config import settings
 from chess_review.db import Base, async_session, engine
 from chess_review.engine.stockfish_pool import StockfishPool, auto_hash_mb
@@ -22,6 +23,7 @@ from chess_review.schemas import HealthResponse
 from chess_review.taskqueue.manager import TaskManager
 from chess_review.taskqueue.tasks import reanalyze_player
 from chess_review.util.paths import get_static_dir
+from chess_review.util.version import get_version
 
 from chess_review.util.paths import get_app_data_dir
 
@@ -120,7 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await engine.dispose()
 
 
-app = FastAPI(title="Chess Review", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Chess Review", version=get_version(), lifespan=lifespan)
 
 # CORS for dev mode (Vite on :5173)
 if settings.dev_mode:
@@ -136,6 +138,7 @@ app.include_router(players_router, prefix="/api")
 app.include_router(games_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(insights_router, prefix="/api")
+app.include_router(updates_router, prefix="/api")
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -158,7 +161,10 @@ async def health() -> HealthResponse:
     queue_ok = tm._worker_task is not None and not tm._worker_task.done()
 
     status = "ok" if (db_ok and sf.available and queue_ok) else "degraded"
-    return HealthResponse(status=status, db=db_ok, engine=engine_name, queue=queue_ok)
+    return HealthResponse(
+        status=status, db=db_ok, engine=engine_name, queue=queue_ok,
+        version=get_version(),
+    )
 
 
 # Serve React SPA (static files)

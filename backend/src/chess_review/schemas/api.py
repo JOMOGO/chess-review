@@ -11,6 +11,28 @@ class HealthResponse(BaseModel):
     db: bool
     engine: str
     queue: bool
+    version: str
+
+
+class UpdateCheckResponse(BaseModel):
+    """Result of comparing the running version against the latest GitHub release."""
+
+    current: str
+    latest: str | None
+    update_available: bool
+    release_url: str | None
+    download_url: str | None
+    # True only in the packaged app with a downloadable installer asset — i.e.
+    # when POST /update/install can actually self-upgrade. In dev the UI should
+    # fall back to opening download_url/release_url in the browser.
+    can_self_install: bool
+
+
+class UpdateInstallResponse(BaseModel):
+    started: bool
+    download_url: str | None
+    release_url: str | None
+    detail: str
 
 
 class CreatePlayerRequest(BaseModel):

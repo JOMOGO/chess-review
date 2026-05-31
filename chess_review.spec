@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 
+from PyInstaller.utils.hooks import copy_metadata
+
 block_cipher = None
 base_dir = os.path.abspath('.')
 
@@ -10,7 +12,10 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(base_dir, 'frontend', 'dist'), 'static'),
-    ],
+    # Ship the package dist-info so importlib.metadata.version('chess-review')
+    # resolves at runtime — that's how util/version.py reports the app version
+    # (and powers the in-app update check).
+    ] + copy_metadata('chess-review'),
     hiddenimports=[
         'aiosqlite',
         'sqlalchemy.dialects.sqlite',

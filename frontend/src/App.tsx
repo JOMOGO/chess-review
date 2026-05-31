@@ -14,6 +14,7 @@ import Recommendations from './pages/Recommendations'
 import TacticalPatterns from './pages/TacticalPatterns'
 import EndgameConversion from './pages/EndgameConversion'
 import ImportToast from './components/ImportToast'
+import UpdateBanner from './components/UpdateBanner'
 import { startImport } from './api/client'
 import { getStoredPlayer, getStoredImport, setStoredImport, isToastVisible, setToastVisible, onImportChanged } from './lib/storage'
 import { useTheme } from './lib/theme'
@@ -94,6 +95,7 @@ function App() {
         <AppRoutes />
       </main>
       <ImportToast />
+      <UpdateBanner />
     </div>
   )
 }
