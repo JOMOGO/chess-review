@@ -25,13 +25,14 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-; Detect a running instance / locked files on upgrade and close them via the
-; Windows Restart Manager, then relaunch afterwards. RestartApplications=yes is
-; what makes the in-app self-update seamless: the running app downloads this
-; installer, launches it /SILENT, gets closed here, and is reopened on the new
-; version once files are swapped (see backend/src/chess_review/updater.py).
+; On upgrade, close a running instance (freeing locked files) via the Windows
+; Restart Manager. We deliberately do NOT use RestartApplications to reopen it:
+; RM-driven restart proved unreliable after a /SILENT self-update (the app
+; closed but never came back). Instead the [Run] section relaunches the app
+; explicitly in silent mode (skipifnotsilent), which is deterministic.
+; See backend/src/chess_review/updater.py.
 CloseApplications=yes
-RestartApplications=yes
+RestartApplications=no
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -41,6 +42,16 @@ OutputBaseFilename=ChessReview-Setup-v{#AppVersion}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+
+[InstallDelete]
+; Wipe the bundled payload before copying the new build. PyInstaller's
+; _internal\ contents change between versions (notably the
+; chess_review-X.Y.Z.dist-info that importlib.metadata reads for the app
+; version), and Inno does not prune files that disappeared between versions —
+; so without this, stale files accumulate and two dist-info folders make the
+; version lookup ambiguous. User data lives in %LOCALAPPDATA%\ChessReview\, not
+; here, so wiping {app}\_internal is safe.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 ; Pull the entire one-dir output recursively: chess-review.exe + _internal\.
@@ -52,7 +63,12 @@ Name: "{userdesktop}\Chess Review";     Filename: "{app}\chess-review.exe"; Task
 Name: "{group}\Uninstall Chess Review"; Filename: "{uninstallexe}"
 
 [Run]
+; Wizard install: optional "Launch Chess Review" checkbox on the Finished page.
 Filename: "{app}\chess-review.exe"; Description: "Launch Chess Review"; Flags: nowait postinstall skipifsilent
+; Silent self-update: no Finished page exists to offer a checkbox, so relaunch
+; the (just-closed) app explicitly. Runs ONLY in silent mode — the wizard case
+; is handled by the entry above, so there's no double launch.
+Filename: "{app}\chess-review.exe"; Flags: nowait skipifnotsilent
 
 ; NOTE: deliberately NO [UninstallDelete] for user data — %LOCALAPPDATA%\ChessReview\
 ; (DB, log, downloaded Stockfish, WebView2 profile) is left intact on uninstall.
