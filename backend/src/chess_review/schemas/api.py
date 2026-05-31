@@ -107,6 +107,34 @@ class GameDetail(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AnalyzePositionRequest(BaseModel):
+    fen: str
+    multipv: int = 3
+    depth: int = 18
+
+
+class AnalyzeLine(BaseModel):
+    """One engine line for an interactively-analysed position. Evals are from
+    White's perspective, matching the stored per-game evals and the eval bar."""
+
+    rank: int
+    eval_cp: int | None
+    eval_mate: int | None
+    best_move_uci: str | None
+    best_move_san: str | None
+    pv_san: list[str]
+    depth: int
+
+
+class AnalyzePositionResponse(BaseModel):
+    fen: str
+    turn: str  # "white" | "black" — side to move
+    game_over: bool
+    lines: list[AnalyzeLine]
+    # True when an import was in flight, so the engine ran on reduced threads.
+    reduced: bool = False
+
+
 class OpeningTreeNode(BaseModel):
     fen_key: str
     san: str

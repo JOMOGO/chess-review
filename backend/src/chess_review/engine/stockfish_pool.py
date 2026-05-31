@@ -73,13 +73,38 @@ def auto_hash_mb(pool_size: int) -> int:
 class StockfishPool:
     """Manages a pool of Stockfish engine processes."""
 
-    def __init__(self, stockfish_path: str, pool_size: int = 2, hash_mb: int = 256):
+    def __init__(
+        self,
+        stockfish_path: str,
+        pool_size: int = 2,
+        hash_mb: int = 256,
+        *,
+        interactive_threads: int = 0,
+        interactive_hash_mb: int = 0,
+        interactive_busy_threads: int = 0,
+    ):
         self._path = stockfish_path
         self._pool_size = pool_size
         self._hash_mb = hash_mb
+        # Dedicated interactive engine config: many threads on ONE engine so a
+        # single live-analysis search is as fast as possible (the opposite of
+        # the pool's one-thread-per-engine, many-engines throughput config).
+        # While an import runs we drop it to `busy_threads` so it coexists with
+        # the import pool instead of oversubscribing every core.
+        self._interactive_threads = interactive_threads if interactive_threads > 0 else (os.cpu_count() or 1)
+        self._interactive_busy_threads = (
+            interactive_busy_threads if interactive_busy_threads > 0
+            else max(1, self._interactive_threads // 4)
+        )
+        self._interactive_hash_mb = interactive_hash_mb if interactive_hash_mb > 0 else hash_mb
+        # Tracks the Threads value currently configured on the interactive
+        # engine so we only send a setoption when it actually changes.
+        self._interactive_threads_active = self._interactive_threads
         self._engines: list[chess.engine.UciProtocol] = []
         self._semaphore = asyncio.Semaphore(pool_size)
         self._available: asyncio.Queue[chess.engine.UciProtocol] = asyncio.Queue()
+        self._interactive: chess.engine.UciProtocol | None = None
+        self._interactive_lock = asyncio.Lock()
         self._started = False
 
     @property
@@ -110,16 +135,35 @@ class StockfishPool:
                 "StockfishPool ready: %d/%d engines (%s)",
                 len(self._engines), self._pool_size, self.engine_name,
             )
+            # Dedicated engine for interactive single-position analysis. Used
+            # only by the live /api/analyze endpoint, which is itself blocked
+            # while imports run — so this many-threaded engine never competes
+            # with the pool for CPU.
+            self._interactive = await self._spawn_one(
+                threads=self._interactive_threads,
+                hash_mb=self._interactive_hash_mb,
+            )
+            if self._interactive is not None:
+                logger.info(
+                    "Interactive engine ready (Threads=%d, Hash=%d MB)",
+                    self._interactive_threads, self._interactive_hash_mb,
+                )
 
-    async def _spawn_one(self) -> chess.engine.UciProtocol | None:
+    async def _spawn_one(
+        self,
+        *,
+        threads: int | None = None,
+        hash_mb: int | None = None,
+    ) -> chess.engine.UciProtocol | None:
         """Open one Stockfish process and configure it. Returns ``None`` on
-        failure so the caller can leave that slot empty.
+        failure so the caller can leave that slot empty. ``threads``/``hash_mb``
+        override the pool defaults (used for the interactive engine).
         """
         try:
             _, engine = await chess.engine.popen_uci(self._path, **_POPEN_FLAGS)
             uci_options: dict[str, object] = {
-                "Threads": settings.sf_threads,
-                "Hash": self._hash_mb,
+                "Threads": settings.sf_threads if threads is None else threads,
+                "Hash": self._hash_mb if hash_mb is None else hash_mb,
             }
             if settings.syzygy_path and Path(settings.syzygy_path).is_dir():
                 uci_options["SyzygyPath"] = settings.syzygy_path
@@ -169,6 +213,12 @@ class StockfishPool:
                 await eng.quit()
             except Exception:
                 pass
+        if self._interactive is not None:
+            try:
+                await self._interactive.quit()
+            except Exception:
+                pass
+            self._interactive = None
         self._engines.clear()
         self._started = False
         logger.info("StockfishPool stopped")
@@ -198,6 +248,50 @@ class StockfishPool:
                 return info
             finally:
                 await self._available.put(engine)
+
+    async def analyse_interactive(
+        self,
+        board: chess.Board,
+        depth: int,
+        multipv: int,
+        *,
+        reduced: bool = False,
+    ) -> list[chess.engine.InfoDict]:
+        """Analyse a single position on the dedicated many-threaded interactive
+        engine, returning up to ``multipv`` ranked lines (best first).
+
+        This engine is NOT part of the pool and does not touch the pool
+        semaphore, so it never waits on import work for an engine slot. A lock
+        serializes concurrent live requests (one engine can't run two searches
+        at once), and the engine is respawned if it died.
+
+        When ``reduced`` is set (an import/reanalysis is in flight) the engine
+        is reconfigured to ``interactive_busy_threads`` so a live search shares
+        the CPU with the import pool instead of oversubscribing every core; it
+        snaps back to full threads once the import finishes. The reconfigure is
+        skipped when the thread count is already correct.
+        """
+        async with self._interactive_lock:
+            engine = self._interactive
+            if engine is None or not self._engine_alive(engine):
+                engine = await self._spawn_one(
+                    threads=self._interactive_threads,
+                    hash_mb=self._interactive_hash_mb,
+                )
+                self._interactive = engine
+                self._interactive_threads_active = self._interactive_threads
+            if engine is None:
+                raise RuntimeError("Interactive Stockfish engine unavailable")
+            want = self._interactive_busy_threads if reduced else self._interactive_threads
+            if want != self._interactive_threads_active:
+                await engine.configure({"Threads": want})
+                self._interactive_threads_active = want
+            info = await engine.analyse(
+                board,
+                chess.engine.Limit(depth=depth),
+                multipv=multipv,
+            )
+            return list(info) if isinstance(info, list) else [info]
 
     @property
     def pool_size(self) -> int:

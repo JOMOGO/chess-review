@@ -1,4 +1,7 @@
 from chess_review.schemas.api import (
+    AnalyzeLine,
+    AnalyzePositionRequest,
+    AnalyzePositionResponse,
     CreatePlayerRequest,
     GameDetail,
     GameListItem,
@@ -12,6 +15,9 @@ from chess_review.schemas.api import (
 )
 
 __all__ = [
+    "AnalyzeLine",
+    "AnalyzePositionRequest",
+    "AnalyzePositionResponse",
     "CreatePlayerRequest",
     "GameDetail",
     "GameListItem",

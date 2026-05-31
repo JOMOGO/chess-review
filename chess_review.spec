@@ -52,13 +52,16 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# One-dir build: the exe stays small and does NOT self-extract to a temp dir
+# on every launch (the one-file behaviour that made cold starts take minutes
+# while Windows Defender re-scanned the unpacked bundle). Output is a folder,
+# dist/chess-review/, containing chess-review.exe + an _internal/ folder; the
+# two must be shipped together.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='chess-review',
     debug=False,
     bootloader_ignore_signals=False,
@@ -66,4 +69,15 @@ exe = EXE(
     upx=False,
     console=False,
     icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='chess-review',
 )

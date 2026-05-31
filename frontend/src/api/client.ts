@@ -74,6 +74,23 @@ export function getGame(gameId: string) {
   return request<GameDetail>(`/games/${gameId}`);
 }
 
+// Live engine analysis of an arbitrary position (powers the interactive
+// board's variation explorer). Unlike the per-game evals, this hits Stockfish
+// directly, so it can take a second or two. `signal` lets TanStack Query abort
+// stale requests when the user steps to another position.
+export function analyzePosition(
+  fen: string,
+  multipv = 3,
+  depth = 18,
+  signal?: AbortSignal,
+) {
+  return request<AnalyzePositionResult>('/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ fen, multipv, depth }),
+    signal,
+  });
+}
+
 // Insights
 export function getOpeningTree(
   playerId: string,
@@ -277,6 +294,24 @@ export interface GameDetail {
   ply_count: number;
   pgn: string;
   moves: GameMove[];
+}
+
+export interface AnalyzeLine {
+  rank: number;
+  eval_cp: number | null;
+  eval_mate: number | null;
+  best_move_uci: string | null;
+  best_move_san: string | null;
+  pv_san: string[];
+  depth: number;
+}
+
+export interface AnalyzePositionResult {
+  fen: string;
+  turn: 'white' | 'black';
+  game_over: boolean;
+  lines: AnalyzeLine[];
+  reduced: boolean;
 }
 
 export interface OpeningTreeNode {

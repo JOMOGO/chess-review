@@ -65,6 +65,17 @@ class TaskManager:
     def get_status(self, job_id: uuid.UUID) -> JobState | None:
         return self._jobs.get(job_id)
 
+    def has_active_jobs(self) -> bool:
+        """True if any enqueued job is still pending or running.
+
+        Used to pause interactive (live) analysis while an import/reanalysis is
+        in flight, so a single-position search doesn't steal CPU from the
+        throughput-optimized import pool.
+        """
+        return any(
+            state.status in ("pending", "running") for state in self._jobs.values()
+        )
+
     async def _run_loop(self) -> None:
         while True:
             job = await self._queue.get()

@@ -77,11 +77,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     hash_mb = settings.sf_hash_mb if settings.sf_hash_mb > 0 else auto_hash_mb(worker_count)
     logger.info("Stockfish Hash: %d MB per engine (%d engines)", hash_mb, worker_count)
 
-    # Start Stockfish pool
+    # Start Stockfish pool. The pool runs one-thread engines for import
+    # throughput; the interactive engine gets all cores so a single live
+    # analysis is as fast as possible when idle. During an import it drops to
+    # `interactive_busy_threads` — the cores the pool leaves free (cpu - pool)
+    # — so live analysis stays usable without oversubscribing the CPU.
     sf = StockfishPool(
         sf_path,
         pool_size=worker_count,
         hash_mb=hash_mb,
+        interactive_threads=cpu_count,
+        interactive_hash_mb=hash_mb,
+        interactive_busy_threads=max(1, cpu_count - worker_count),
     )
     await sf.start()
     app.state.sf_pool = sf

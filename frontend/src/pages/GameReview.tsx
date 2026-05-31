@@ -1,13 +1,16 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useParams, useLocation, useSearchParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Chessboard } from 'react-chessboard'
+import type { PieceDropHandlerArgs, SquareHandlerArgs } from 'react-chessboard'
 import { Chess } from 'chess.js'
+import type { Square } from 'chess.js'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
   ReferenceArea, ReferenceDot,
 } from 'recharts'
-import { getGame } from '../api/client'
+import { getGame, analyzePosition } from '../api/client'
+import type { AnalyzeLine } from '../api/client'
 import InfoTip from '../components/InfoTip'
 
 const CLASS_COLORS: Record<string, string> = {
@@ -46,6 +49,31 @@ const CLASS_DESCRIPTIONS: Record<string, string> = {
   miss: 'You were winning, played a non-top move, and the winning advantage evaporated. Same severity as a blunder, but specifically a "missed conversion."',
 }
 
+// Arrows for the engine's top moves: rank 1 strongest, 2/3 progressively
+// fainter so the principal variation reads as "the" move at a glance.
+const ENGINE_ARROW_COLORS = [
+  'rgba(34, 197, 94, 0.85)',
+  'rgba(99, 102, 241, 0.55)',
+  'rgba(99, 102, 241, 0.32)',
+]
+
+const ENGINE_PREF_KEY = 'chess_review_engine_on'
+
+// An exploration line branching off the mainline at `fromPly`. `cursor` is how
+// many of its moves are currently shown (0 = the branch-point position itself).
+interface VariationMove {
+  san: string
+  uci: string
+  fen: string
+  from: string
+  to: string
+}
+interface Variation {
+  fromPly: number
+  moves: VariationMove[]
+  cursor: number
+}
+
 export default function GameReview() {
   const { id } = useParams<{ id: string }>()
   const location = useLocation()
@@ -63,6 +91,21 @@ export default function GameReview() {
   // vertical line whenever the user hovered over a sign flip.
   const [hoverPly, setHoverPly] = useState<number | null>(null)
 
+  // Interactive exploration: a side variation the user plays out by dragging
+  // (or clicking) pieces, branching from whatever position is on the board.
+  const [variation, setVariation] = useState<Variation | null>(null)
+  // Click-to-move: the currently selected source square (null = nothing held).
+  const [selectedSquare, setSelectedSquare] = useState<string | null>(null)
+
+  // Live engine on/off, persisted. When on, every position the user lands on
+  // (mainline or variation) is sent to Stockfish for top-N moves + eval.
+  const [engineOn, setEngineOn] = useState<boolean>(() => {
+    try { return localStorage.getItem(ENGINE_PREF_KEY) !== 'false' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(ENGINE_PREF_KEY, engineOn ? 'true' : 'false') } catch { /* ignore */ }
+  }, [engineOn])
+
   // Determine back destination
   const backTo = location.state?.from || '/'
 
@@ -74,18 +117,6 @@ export default function GameReview() {
 
   const game = query.data
 
-  // Keyboard navigation
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') setCurrentPly((p) => Math.max(0, p - 1))
-      else if (e.key === 'ArrowRight') setCurrentPly((p) => Math.min((game?.moves.length ?? 0), p + 1))
-      else if (e.key === 'Home') setCurrentPly(0)
-      else if (e.key === 'End') setCurrentPly(game?.moves.length ?? 0)
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [game])
-
   const positions = useMemo(() => {
     if (!game) return []
     const chess = new Chess()
@@ -96,6 +127,201 @@ export default function GameReview() {
     }
     return fens
   }, [game])
+
+  // FEN currently shown on the board: the variation tip (or its branch point)
+  // when exploring, otherwise the mainline position at `currentPly`.
+  const displayFen = useMemo<string | null>(() => {
+    if (!game) return null
+    if (variation) {
+      return variation.cursor === 0
+        ? positions[variation.fromPly] ?? null
+        : variation.moves[variation.cursor - 1]?.fen ?? null
+    }
+    return positions[currentPly] ?? null
+  }, [game, variation, currentPly, positions])
+
+  const displayWhiteToMove = displayFen ? displayFen.split(' ')[1] === 'w' : true
+
+  // Debounce the position fed to the engine so rapid arrow-stepping fires a
+  // single request for the position you land on, not one per ply.
+  const [debouncedFen, setDebouncedFen] = useState<string | null>(null)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFen(displayFen), 250)
+    return () => clearTimeout(t)
+  }, [displayFen])
+
+  const engineQuery = useQuery({
+    queryKey: ['analyze', debouncedFen],
+    queryFn: ({ signal }) => analyzePosition(debouncedFen!, 3, 18, signal),
+    enabled: engineOn && !!debouncedFen,
+    staleTime: Infinity,   // a position's eval never changes
+    gcTime: 5 * 60 * 1000,
+    retry: false,
+  })
+
+  // Only trust engine output once the debounce has caught up to the displayed
+  // position — otherwise we'd briefly paint the previous position's lines.
+  const engineSettled = debouncedFen === displayFen
+  const engineData = engineSettled ? engineQuery.data : undefined
+  const engineReady = engineOn && !!engineData
+  const engineError = engineOn && engineSettled && engineQuery.isError
+  const engineLoading = engineOn && !!displayFen && !engineReady && !engineError
+  // During an import the backend runs the engine on reduced threads (still
+  // usable, just shallower/slower); surface that as a subtle indicator.
+  const engineReduced = engineReady && !!engineData?.reduced
+  const engineLines: AnalyzeLine[] =
+    engineReady && engineData && !engineData.game_over ? engineData.lines : []
+
+  // Apply a move (from drag or click) to the displayed position, extending or
+  // starting a variation. Returns false for illegal moves so the piece snaps
+  // back. Auto-queens unless an explicit promotion piece is supplied.
+  const tryMove = useCallback(
+    (from: string, to: string, promo?: string): boolean => {
+      if (!displayFen) return false
+      const c = new Chess(displayFen)
+      let promotion = promo
+      if (!promotion) {
+        const piece = c.get(from as Square)
+        if (piece?.type === 'p' && (to.endsWith('8') || to.endsWith('1'))) promotion = 'q'
+      }
+      let move
+      try {
+        move = c.move({ from, to, promotion })
+      } catch {
+        return false
+      }
+      if (!move) return false
+      const vm: VariationMove = {
+        san: move.san,
+        uci: move.lan,
+        fen: move.after,
+        from: move.from,
+        to: move.to,
+      }
+      setVariation((prev) => {
+        if (!prev) return { fromPly: currentPly, moves: [vm], cursor: 1 }
+        const kept = prev.moves.slice(0, prev.cursor)
+        return { fromPly: prev.fromPly, moves: [...kept, vm], cursor: prev.cursor + 1 }
+      })
+      setSelectedSquare(null)
+      return true
+    },
+    [displayFen, currentPly],
+  )
+
+  const onPieceDrop = useCallback(
+    ({ sourceSquare, targetSquare }: PieceDropHandlerArgs): boolean => {
+      if (!targetSquare) return false
+      return tryMove(sourceSquare, targetSquare)
+    },
+    [tryMove],
+  )
+
+  const onSquareClick = useCallback(
+    ({ square, piece }: SquareHandlerArgs) => {
+      if (selectedSquare && selectedSquare !== square) {
+        if (tryMove(selectedSquare, square)) return
+      }
+      setSelectedSquare(piece && square !== selectedSquare ? square : null)
+    },
+    [selectedSquare, tryMove],
+  )
+
+  const playUci = useCallback(
+    (uci: string) => {
+      if (!uci || uci.length < 4) return
+      tryMove(uci.slice(0, 2), uci.slice(2, 4), uci.length > 4 ? uci[4] : undefined)
+    },
+    [tryMove],
+  )
+
+  // Navigation. The buttons/chart/move-list all return to the mainline; arrow
+  // keys walk the variation when one is open, then fall through to the game.
+  const goMainline = useCallback(
+    (ply: number) => {
+      setVariation(null)
+      setSelectedSquare(null)
+      setCurrentPly(Math.max(0, Math.min(game?.moves.length ?? 0, ply)))
+    },
+    [game],
+  )
+
+  const stepBack = useCallback(() => {
+    setSelectedSquare(null)
+    if (variation) {
+      // Walk back through the line; at the branch point, drop the variation
+      // and land on the mainline position we branched from.
+      setVariation((prev) =>
+        prev && prev.cursor > 0 ? { ...prev, cursor: prev.cursor - 1 } : null,
+      )
+    } else {
+      setCurrentPly((p) => Math.max(0, p - 1))
+    }
+  }, [variation])
+
+  const stepForward = useCallback(() => {
+    setSelectedSquare(null)
+    if (variation) {
+      setVariation((prev) =>
+        prev && prev.cursor < prev.moves.length ? { ...prev, cursor: prev.cursor + 1 } : prev,
+      )
+    } else {
+      setCurrentPly((p) => Math.min(game?.moves.length ?? 0, p + 1))
+    }
+  }, [variation, game])
+
+  const jumpVariation = useCallback((cursor: number) => {
+    setSelectedSquare(null)
+    setVariation((prev) => (prev ? { ...prev, cursor } : prev))
+  }, [])
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') stepBack()
+      else if (e.key === 'ArrowRight') stepForward()
+      else if (e.key === 'Home') goMainline(0)
+      else if (e.key === 'End') goMainline(game?.moves.length ?? 0)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [stepBack, stepForward, goMainline, game])
+
+  // Last move + selection/legal-target highlights on the board.
+  const squareStyles = useMemo<Record<string, React.CSSProperties>>(() => {
+    const styles: Record<string, React.CSSProperties> = {}
+    if (!game) return styles
+    // Highlight the move that led to the displayed position.
+    let lastFrom: string | null = null
+    let lastTo: string | null = null
+    if (variation && variation.cursor > 0) {
+      const vm = variation.moves[variation.cursor - 1]
+      lastFrom = vm.from
+      lastTo = vm.to
+    } else if (!variation && currentPly > 0) {
+      const uci = game.moves[currentPly - 1]?.uci
+      if (uci && uci.length >= 4) {
+        lastFrom = uci.slice(0, 2)
+        lastTo = uci.slice(2, 4)
+      }
+    }
+    if (lastFrom) styles[lastFrom] = { background: 'rgba(234, 179, 8, 0.22)' }
+    if (lastTo) styles[lastTo] = { background: 'rgba(234, 179, 8, 0.22)' }
+    // Selected piece + its legal destinations (click-to-move affordance).
+    if (selectedSquare && displayFen) {
+      styles[selectedSquare] = { background: 'rgba(129, 140, 248, 0.45)' }
+      try {
+        const c = new Chess(displayFen)
+        for (const m of c.moves({ square: selectedSquare as Square, verbose: true })) {
+          const occupied = !!c.get(m.to as Square)
+          styles[m.to] = occupied
+            ? { boxShadow: 'inset 0 0 0 4px rgba(129, 140, 248, 0.55)' }
+            : { background: 'radial-gradient(circle, rgba(129,140,248,0.55) 20%, transparent 22%)' }
+        }
+      } catch { /* ignore illegal selection */ }
+    }
+    return styles
+  }, [game, variation, currentPly, selectedSquare, displayFen])
 
   const evalData = useMemo(() => {
     if (!game) return []
@@ -305,13 +531,11 @@ export default function GameReview() {
   const boardOrientation: 'white' | 'black' = userIsWhite ? 'white' : 'black'
   const currentMove = currentPly > 0 ? game.moves[currentPly - 1] : null
 
-  // Best move for the *current* position to move from. moves[currentPly] is
-  // the next move in the game, whose position_before is what's on the board.
+  // Precomputed best move for the *mainline* position (used as the engine-off
+  // fallback). moves[currentPly] is the next mainline move, whose
+  // position_before is what's on the board at currentPly.
   const nextMove = currentPly < game.moves.length ? game.moves[currentPly] : null
   const bestUci = nextMove?.best_move_uci ?? null
-  const bestArrow = bestUci && bestUci.length >= 4
-    ? [{ startSquare: bestUci.slice(0, 2), endSquare: bestUci.slice(2, 4), color: 'rgba(34, 197, 94, 0.75)' }]
-    : []
   let bestSan: string | null = null
   if (bestUci && bestUci.length >= 4) {
     try {
@@ -327,9 +551,35 @@ export default function GameReview() {
     }
   }
   const playedMatchesBest = bestUci != null && nextMove != null && nextMove.uci === bestUci
+  const fallbackArrow = bestUci && bestUci.length >= 4
+    ? [{ startSquare: bestUci.slice(0, 2), endSquare: bestUci.slice(2, 4), color: ENGINE_ARROW_COLORS[0] }]
+    : []
+
+  // Arrows on the board: the live engine's top moves when available, else the
+  // precomputed best (mainline only — variations have no stored eval).
+  const engineArrows = engineLines
+    .filter((l) => l.best_move_uci && l.best_move_uci.length >= 4)
+    .map((l, i) => ({
+      startSquare: l.best_move_uci!.slice(0, 2),
+      endSquare: l.best_move_uci!.slice(2, 4),
+      color: ENGINE_ARROW_COLORS[i] ?? ENGINE_ARROW_COLORS[ENGINE_ARROW_COLORS.length - 1],
+    }))
+  const boardArrows = engineArrows.length > 0 ? engineArrows : (variation ? [] : fallbackArrow)
+
+  // Eval bar: live engine eval for the displayed position when ready, else the
+  // mainline stored eval. Variations with the engine off get a neutral bar.
+  const topLine = engineLines[0]
+  let evalBarCp: number | null = null
+  let evalBarMate: number | null = null
+  if (engineReady && topLine) {
+    evalBarCp = topLine.eval_cp
+    evalBarMate = topLine.eval_mate
+  } else if (!variation && currentMove) {
+    evalBarCp = currentMove.eval_after_cp ?? null
+  }
 
   // Who's to move at the displayed position, and whether the game is over here.
-  const gameOver = currentPly === game.moves.length
+  const gameOver = !variation && currentPly === game.moves.length
   const whiteToMove = currentPly % 2 === 0
   const topPlayer = userIsWhite
     ? { name: game.black_username, rating: game.black_rating, color: 'black' as const, isUser: false }
@@ -398,7 +648,7 @@ export default function GameReview() {
             column so the board can claim the full vertical space here. */}
         <div className="flex flex-col min-h-0">
           <div className="flex gap-1 flex-1 min-h-0 justify-start">
-            <EvalBar cp={currentMove?.eval_after_cp ?? null} flipped={boardOrientation === 'black'} />
+            <EvalBar cp={evalBarCp} mate={evalBarMate} flipped={boardOrientation === 'black'} />
 
             {/* Board slot: inner div is sized to the nearest multiple of 8
                 pixels so the chessboard's 1fr×8 grid never falls on a
@@ -414,10 +664,13 @@ export default function GameReview() {
               {boardSize > 0 && (
                 <div style={{ width: boardSize, height: boardSize }}>
                   <Chessboard options={{
-                    position: currentFen,
+                    position: displayFen ?? 'start',
                     boardOrientation: boardOrientation,
-                    allowDragging: false,
-                    arrows: bestArrow,
+                    allowDragging: true,
+                    onPieceDrop: onPieceDrop,
+                    onSquareClick: onSquareClick,
+                    squareStyles: squareStyles,
+                    arrows: boardArrows,
                   }} />
                 </div>
               )}
@@ -426,13 +679,16 @@ export default function GameReview() {
 
           {/* Navigation buttons */}
           <div className="flex items-center justify-center gap-1.5 mt-1">
-            <NavBtn onClick={() => setCurrentPly(0)} label="⟨⟨" title="Jump to start" />
-            <NavBtn onClick={() => setCurrentPly(Math.max(0, currentPly - 1))} label="⟨" title="Previous move (←)" />
+            <NavBtn onClick={() => goMainline(0)} label="⟨⟨" title="Jump to start (Home)" />
+            <NavBtn onClick={stepBack} label="⟨" title="Previous move (←)" />
             <span className="text-xs px-2 font-mono min-w-[64px] text-center" style={{ color: 'var(--text-secondary)' }}>
-              {currentPly > 0 ? `${Math.ceil(currentPly / 2)}.${currentPly % 2 === 1 ? '..' : ''}` : 'Start'}
+              {(() => {
+                const ply = variation ? variation.fromPly + variation.cursor : currentPly
+                return ply > 0 ? `${Math.ceil(ply / 2)}.${ply % 2 === 1 ? '..' : ''}` : 'Start'
+              })()}
             </span>
-            <NavBtn onClick={() => setCurrentPly(Math.min(positions.length - 1, currentPly + 1))} label="⟩" title="Next move (→)" />
-            <NavBtn onClick={() => setCurrentPly(positions.length - 1)} label="⟩⟩" title="Jump to end" />
+            <NavBtn onClick={stepForward} label="⟩" title="Next move (→)" />
+            <NavBtn onClick={() => goMainline(game.moves.length)} label="⟩⟩" title="Jump to end (End)" />
           </div>
 
           {/* Eval graph — width pinned to (eval-bar 22 + gap-1 4 + boardSize)
@@ -455,7 +711,7 @@ export default function GameReview() {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={evalData} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}
                 onClick={(e) => {
-                  if (e?.activeLabel != null) setCurrentPly(Math.round(Number(e.activeLabel)))
+                  if (e?.activeLabel != null) goMainline(Math.round(Number(e.activeLabel)))
                 }}
                 onMouseMove={(e) => {
                   if (e?.activeLabel != null) setHoverPly(Math.round(Number(e.activeLabel)))
@@ -570,6 +826,30 @@ export default function GameReview() {
           <PlayerStrip {...topPlayer} toMove={topToMove} />
           <PlayerStrip {...bottomPlayer} toMove={bottomToMove} />
 
+          {/* Variation breadcrumb — only while exploring a side line. */}
+          {variation && (
+            <VariationBar
+              variation={variation}
+              onJump={jumpVariation}
+              onReturn={() => goMainline(variation.fromPly)}
+            />
+          )}
+
+          {/* Live engine: top moves + eval for whatever's on the board. */}
+          <EnginePanel
+            engineOn={engineOn}
+            onToggle={() => setEngineOn((v) => !v)}
+            lines={engineLines}
+            loading={engineLoading}
+            error={engineError}
+            reduced={engineReduced}
+            gameOver={engineReady && !!engineData?.game_over}
+            whiteToMove={displayWhiteToMove}
+            onPlay={playUci}
+            fallbackBestSan={!variation ? bestSan : null}
+            fallbackMatchesBest={playedMatchesBest && !!currentMove}
+          />
+
           {/* Accuracy & classification summary */}
           <div className="bg-[#16162a] border border-gray-700 rounded-lg p-4">
             <div className="text-center mb-3">
@@ -628,8 +908,9 @@ export default function GameReview() {
             </div>
           </div>
 
-          {/* Current move info */}
-          {currentMove && (
+          {/* Current move info — mainline only (the variation bar covers the
+              explored line). */}
+          {!variation && currentMove && (
             <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-white">
@@ -657,29 +938,10 @@ export default function GameReview() {
             </div>
           )}
 
-          {/* Engine's best move from the current position */}
-          {bestSan && (
-            <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span
-                  className="inline-block rounded-sm"
-                  style={{ width: 10, height: 10, background: 'rgba(34, 197, 94, 0.85)' }}
-                  aria-hidden
-                />
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {whiteToMove ? 'White' : 'Black'} to play &mdash; engine suggests
-                </span>
-              </div>
-              <span className="font-mono text-sm text-green-400">
-                {bestSan}{playedMatchesBest && currentMove ? ' ✓' : ''}
-              </span>
-            </div>
-          )}
-
           {/* Move list — `flex-1 min-h-0` fills the remaining height of the
               right column. Since the parent grid row is height-capped above,
               this naturally ends exactly where the eval chart ends on the
-              left. */}
+              left. Clicking a move returns to the mainline at that ply. */}
           <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3 overflow-y-auto flex-1 min-h-0">
             <div className="grid grid-cols-[32px_1fr_1fr] gap-y-0.5 text-sm">
               {game.moves.reduce<Array<{ num: number; white?: typeof game.moves[0]; black?: typeof game.moves[0] }>>(
@@ -690,7 +952,7 @@ export default function GameReview() {
                 }, []
               ).map((row) => (
                 <MoveRow key={row.num} num={row.num} white={row.white} black={row.black}
-                  currentPly={currentPly} onSelect={setCurrentPly} />
+                  currentPly={variation ? -1 : currentPly} onSelect={goMainline} />
               ))}
             </div>
           </div>
@@ -750,6 +1012,171 @@ function PlayerStrip({ name, rating, color, isUser, toMove }: {
   )
 }
 
+// Breadcrumb for the active exploration line. Each move is clickable (jump to
+// that point in the line); "Return to game" drops back onto the mainline.
+function VariationBar({ variation, onJump, onReturn }: {
+  variation: Variation
+  onJump: (cursor: number) => void
+  onReturn: () => void
+}) {
+  const fromNum = Math.ceil((variation.fromPly + 1) / 2)
+  return (
+    <div className="bg-indigo-950/40 border border-indigo-500/50 rounded-lg p-2.5">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[11px] uppercase tracking-wide font-semibold text-indigo-300">
+          ⎇ Exploring from move {fromNum}
+        </span>
+        <button
+          onClick={onReturn}
+          className="text-[11px] px-2 py-0.5 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-100 transition-colors"
+        >
+          ↩ Return to game
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-x-1 gap-y-0.5 text-sm font-mono leading-snug">
+        {variation.moves.map((vm, j) => {
+          const ply = variation.fromPly + 1 + j
+          const isWhite = ply % 2 === 1
+          const num = Math.ceil(ply / 2)
+          const active = variation.cursor === j + 1
+          return (
+            <button
+              key={j}
+              onClick={() => onJump(j + 1)}
+              className={`px-1 rounded transition-colors ${active ? 'bg-indigo-500/40 text-white' : 'hover:bg-indigo-500/20'}`}
+              style={{ color: active ? '#fff' : 'var(--text-secondary)' }}
+            >
+              {(isWhite || j === 0) && (
+                <span style={{ color: 'var(--text-muted)' }}>{num}.{isWhite ? '' : '..'} </span>
+              )}
+              {vm.san}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// White-POV eval string. Mate as "M5" / "−M3"; centipawns as "+1.20".
+function formatEval(cp: number | null, mate: number | null): string {
+  if (mate != null) return `${mate > 0 ? '' : '−'}M${Math.abs(mate)}`
+  if (cp == null) return '—'
+  const v = cp / 100
+  return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}`
+}
+
+// Live engine readout: a toggle plus up to N ranked lines (eval, best move, PV)
+// for the displayed position. Each line is clickable to play its move into the
+// variation explorer. Falls back to the precomputed best move when off.
+function EnginePanel({
+  engineOn, onToggle, lines, loading, error, reduced, gameOver, whiteToMove, onPlay, fallbackBestSan, fallbackMatchesBest,
+}: {
+  engineOn: boolean
+  onToggle: () => void
+  lines: AnalyzeLine[]
+  loading: boolean
+  error: boolean
+  reduced: boolean
+  gameOver: boolean
+  whiteToMove: boolean
+  onPlay: (uci: string) => void
+  fallbackBestSan: string | null
+  fallbackMatchesBest: boolean
+}) {
+  const depth = lines[0]?.depth
+  return (
+    <div className="bg-[#16162a] border border-gray-700 rounded-lg p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+          <span>Engine</span>
+          {engineOn && depth != null && <span className="normal-case">· depth {depth}</span>}
+          {engineOn && reduced && (
+            <span className="normal-case text-amber-400" title="Running on reduced threads while an import is in progress">· reduced (import)</span>
+          )}
+          {engineOn && loading && (
+            <span className="normal-case text-indigo-400 animate-pulse">· analyzing…</span>
+          )}
+          <InfoTip label="Live engine analysis">
+            Stockfish analyses whatever position is on the board — including any
+            line you play out by dragging pieces. The arrows show its top moves
+            for the side to move (rank 1 brightest). Click a line to play that
+            move into your variation. While a game import is running it analyses
+            on reduced threads so it doesn't slow the import down.
+          </InfoTip>
+        </div>
+        <button
+          onClick={onToggle}
+          role="switch"
+          aria-checked={engineOn}
+          title={engineOn ? 'Turn engine off' : 'Turn engine on'}
+          className={`relative w-9 h-5 rounded-full transition-colors ${engineOn ? 'bg-indigo-600' : 'bg-gray-600'}`}
+        >
+          <span
+            className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+            style={{ left: engineOn ? 18 : 2 }}
+          />
+        </button>
+      </div>
+
+      {!engineOn ? (
+        fallbackBestSan ? (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Best (from game analysis)
+            </span>
+            <span className="font-mono text-green-400">
+              {fallbackBestSan}{fallbackMatchesBest ? ' ✓' : ''}
+            </span>
+          </div>
+        ) : (
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Engine off — turn on for live best moves in any position.
+          </div>
+        )
+      ) : error ? (
+        <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          Engine unavailable right now — it may still be starting up. Try
+          stepping to another move.
+        </div>
+      ) : gameOver ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          Game over in this position — no moves to analyse.
+        </div>
+      ) : lines.length === 0 ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          {loading ? 'Asking Stockfish…' : 'No lines.'}
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            {whiteToMove ? 'White' : 'Black'} to play · engine suggests
+          </div>
+          {lines.map((l, i) => (
+            <button
+              key={l.rank}
+              onClick={() => l.best_move_uci && onPlay(l.best_move_uci)}
+              className={`w-full flex items-center gap-2 text-left px-2 py-1 rounded transition-colors hover:bg-gray-700/50 ${i === 0 ? 'bg-gray-700/30' : ''}`}
+              title="Play this move into your variation"
+            >
+              <span
+                className="font-mono text-xs font-bold tabular-nums shrink-0 w-12 text-right"
+                style={{ color: i === 0 ? '#86efac' : 'var(--text-secondary)' }}
+              >
+                {formatEval(l.eval_cp, l.eval_mate)}
+              </span>
+              <span className="font-mono text-sm text-white shrink-0">{l.best_move_san ?? '—'}</span>
+              <span className="font-mono text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                {l.pv_san.slice(1, 7).join(' ')}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MoveRow({ num, white, black, currentPly, onSelect }: {
   num: number
   white?: { ply: number; san: string; classification: string | null; is_user_move: boolean }
@@ -784,20 +1211,26 @@ function MoveCell({ move, isActive, onClick }: {
   )
 }
 
-function EvalBar({ cp, flipped }: { cp: number | null; flipped: boolean }) {
+function EvalBar({ cp, mate, flipped }: { cp: number | null; mate: number | null; flipped: boolean }) {
   // Lichess-style: the dark background represents black's share; an absolutely
   // positioned white block fills from the white player's side. Using absolute
   // positioning rather than a flex column avoids the percentage-height collapse
   // that left the white half invisible inside a flex parent with no resolved
   // intrinsic height.
-  const whitePct = cp == null
-    ? 50
-    : Math.max(2, Math.min(98, 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * Math.max(-1500, Math.min(1500, cp)))) - 1)))
-  const evalText = cp == null
-    ? null
-    : Math.abs(cp) >= 1000
+  let whitePct: number
+  let evalText: string | null
+  if (mate != null) {
+    whitePct = mate > 0 ? 100 : 0
+    evalText = `${mate > 0 ? '' : '−'}M${Math.abs(mate)}`
+  } else if (cp == null) {
+    whitePct = 50
+    evalText = null
+  } else {
+    whitePct = Math.max(2, Math.min(98, 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * Math.max(-1500, Math.min(1500, cp)))) - 1)))
+    evalText = Math.abs(cp) >= 1000
       ? `${cp > 0 ? '+' : '−'}${(Math.abs(cp) / 100).toFixed(0)}`
       : `${cp > 0 ? '+' : cp < 0 ? '−' : ''}${(Math.abs(cp) / 100).toFixed(1)}`
+  }
   // The number sits at the bar's vertical midpoint and flips its colour based
   // on whichever side currently covers the centre line — so it's always
   // contrast-readable, no matter the orientation.
