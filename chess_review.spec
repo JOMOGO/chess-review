@@ -73,7 +73,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=None,
+    icon=os.path.join(base_dir, 'installer', 'chess-review.ico'),
 )
 
 coll = COLLECT(

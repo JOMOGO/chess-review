@@ -38,7 +38,10 @@ SolidCompression=yes
 WizardStyle=modern
 OutputDir=..\dist
 OutputBaseFilename=ChessReview-Setup-v{#AppVersion}
-; No SetupIconFile: repo has no .ico and the exe is built icon=None.
+; App/installer icon (generated from frontend/public/favicon.svg). The exe also
+; embeds it via the PyInstaller spec, so Start Menu / desktop shortcuts and the
+; window get the icon too.
+SetupIconFile=chess-review.ico
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
