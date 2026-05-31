@@ -1,5 +1,6 @@
 import { Routes, Route, Link, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import PlayerImport from './pages/PlayerImport'
 import PlayerDashboard from './pages/PlayerDashboard'
 import GameList from './pages/GameList'
@@ -15,7 +16,7 @@ import TacticalPatterns from './pages/TacticalPatterns'
 import EndgameConversion from './pages/EndgameConversion'
 import ImportToast from './components/ImportToast'
 import UpdateBanner from './components/UpdateBanner'
-import { startImport } from './api/client'
+import { startImport, getHealth } from './api/client'
 import { getStoredPlayer, getStoredImport, setStoredImport, isToastVisible, setToastVisible, onImportChanged } from './lib/storage'
 import { useTheme } from './lib/theme'
 
@@ -86,6 +87,7 @@ function App() {
           Chess Review
         </Link>
         <div className="flex items-center gap-3">
+          <VersionBadge />
           <PlayerNav />
           <ToastToggle />
           <ThemeToggle />
@@ -97,6 +99,21 @@ function App() {
       <ImportToast />
       <UpdateBanner />
     </div>
+  )
+}
+
+function VersionBadge() {
+  const { data } = useQuery({
+    queryKey: ['health'],
+    queryFn: getHealth,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
+  if (!data?.version) return null
+  return (
+    <span className="text-xs font-mono" style={{ color: 'var(--text-secondary)' }} title="App version">
+      v{data.version}
+    </span>
   )
 }
 
