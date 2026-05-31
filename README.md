@@ -23,18 +23,20 @@ across all your games — not just one-off blunders.
 
 ## Install
 
-Download `chess-review.exe` from the [Releases](../../releases) page and double-click.
+Download `ChessReview-Setup-vX.Y.Z.exe` from the [Releases](../../releases) page and run it. It installs per-user (no admin prompt) and adds a Start Menu shortcut (and an optional desktop shortcut). Since the installer is unsigned, Windows SmartScreen may warn on first run — choose **More info → Run anyway**.
 
-App data (SQLite DB, log, downloaded Stockfish binary) lives in `%LOCALAPPDATA%\ChessReview\`. Uninstalling is just deleting the `.exe` and that folder.
+App data (SQLite DB, log, the auto-downloaded Stockfish binary, WebView2 profile) lives in `%LOCALAPPDATA%\ChessReview\`, separate from the program files. Uninstall via **Settings → Apps → "Chess Review"** (or the Start Menu uninstaller); your data folder is left intact — delete `%LOCALAPPDATA%\ChessReview\` manually to remove it.
 
 ## Build from source
 
-Requires Python 3.12+ and Node 20+ on Windows.
+Requires Python 3.12+ and Node 20+ on Windows. Producing the installer also needs
+[Inno Setup 6](https://jrsoftware.org/isdl.php) (with `ISCC` on `PATH`); without it,
+`build.py` still emits the runnable one-dir build at `dist\chess-review\`.
 
 ```powershell
 pip install -e "backend[dev,build]"
 cd frontend; npm install; cd ..
-python build.py     # produces dist/chess-review.exe
+python build.py     # produces dist\ChessReview-Setup-v<version>.exe
 ```
 
 ## Dev loop

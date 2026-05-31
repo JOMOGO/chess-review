@@ -46,23 +46,29 @@ jobs:
       - name: Install backend with build extras
         run: pip install -e "backend[build]"
 
-      - name: Build frontend + .exe
+      - name: Install Inno Setup
+        # ISCC is NOT preinstalled on the windows-latest (Server 2025) image.
+        run: choco install innosetup -y
+        shell: pwsh
+
+      - name: Build frontend + installer
         run: python build.py
 
-      - name: Verify .exe exists
+      - name: Verify installer exists
         shell: pwsh
         run: |
-          if (-not (Test-Path dist/chess-review.exe)) {
-            Write-Error "dist/chess-review.exe not produced"
+          $installer = Get-ChildItem dist/ChessReview-Setup-v*.exe -ErrorAction SilentlyContinue
+          if (-not $installer) {
+            Write-Error "Installer dist/ChessReview-Setup-v*.exe not produced"
             exit 1
           }
-          Get-Item dist/chess-review.exe | Select-Object Name, Length
+          $installer | Select-Object Name, Length
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: dist/chess-review.exe
+          files: dist/ChessReview-Setup-v*.exe
           fail_on_unmatched_files: true
           # Don't generate notes — preserves whatever the /release command
           # (or you) wrote into the release body.
