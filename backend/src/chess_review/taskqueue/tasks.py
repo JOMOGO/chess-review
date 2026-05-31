@@ -5,7 +5,7 @@ import logging
 import uuid as uuid_mod
 from datetime import datetime, timezone
 import chess
-from sqlalchemy import select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import selectinload
 
 from chess_review.config import settings
@@ -155,11 +155,34 @@ async def reanalyze_player(
         if not game_ids:
             return
 
+        # Count the positions analysis will visit — distinct positions per
+        # game, summed (the same basis the import path uses for
+        # total_positions). Done as one aggregate query (UNION dedupes the
+        # before/after position ids per game) so the progress toast shows a
+        # real ratio when it tracks this recovery job. The WHERE mirrors the
+        # game_ids query above rather than an IN over every id, so it stays a
+        # single bounded statement even for large recoveries.
+        _before = (
+            select(GameMove.game_id, GameMove.position_before_id.label("pid"))
+            .join(Game, Game.id == GameMove.game_id)
+            .where(Game.player_id == pid, Game.analyzed_at.is_(None))
+        )
+        _after = (
+            select(GameMove.game_id, GameMove.position_after_id.label("pid"))
+            .join(Game, Game.id == GameMove.game_id)
+            .where(Game.player_id == pid, Game.analyzed_at.is_(None))
+        )
+        _pairs = union(_before, _after).subquery()
+        total_positions = (await session.execute(
+            select(func.count()).select_from(_pairs)
+        )).scalar_one()
+
         job = ImportJob(
             player_id=pid,
             status="running",
             total_games=len(game_ids),
             imported_games=len(game_ids),
+            total_positions=total_positions,
             started_at=datetime.now(timezone.utc),
         )
         session.add(job)

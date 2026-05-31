@@ -18,6 +18,10 @@ class JobState:
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    # The player this job operates on (stringified UUID), if any. Lets callers
+    # detect an already-active import/analysis for a player and avoid starting
+    # a competing one that would fight over the shared Stockfish pool.
+    player_key: str | None = None
 
 
 @dataclass
@@ -54,16 +58,30 @@ class TaskManager:
         self,
         func: Callable[..., Coroutine[Any, Any, None]],
         *args: Any,
+        player_key: str | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         job_id = uuid.uuid4()
-        self._jobs[job_id] = JobState()
+        self._jobs[job_id] = JobState(player_key=player_key)
         await self._queue.put(_Job(job_id, func, args, kwargs))
         logger.info("Enqueued job %s -> %s", job_id, func.__name__)
         return job_id
 
     def get_status(self, job_id: uuid.UUID) -> JobState | None:
         return self._jobs.get(job_id)
+
+    def active_job_for_player(self, player_key: str) -> uuid.UUID | None:
+        """Return the id of a pending/running job for this player, if any.
+
+        Used to avoid starting a second import/analysis for a player who
+        already has one in flight (e.g. the startup-recovery job). Two jobs
+        for the same player fight over the shared engine pool: the later one
+        gets starved and its progress sits at 0 while the first does the work.
+        """
+        for jid, state in self._jobs.items():
+            if state.player_key == player_key and state.status in ("pending", "running"):
+                return jid
+        return None
 
     def has_active_jobs(self) -> bool:
         """True if any enqueued job is still pending or running.

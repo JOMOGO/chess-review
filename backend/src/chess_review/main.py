@@ -108,7 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "Recovering %d unanalyzed game(s) for player %s",
                 count, player_id,
             )
-            await tm.enqueue(reanalyze_player, str(player_id), sf_pool=sf)
+            await tm.enqueue(
+                reanalyze_player, str(player_id), sf_pool=sf,
+                player_key=str(player_id),
+            )
 
     yield
 
