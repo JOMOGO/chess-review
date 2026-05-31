@@ -49,12 +49,16 @@ const CLASS_DESCRIPTIONS: Record<string, string> = {
   miss: 'You were winning, played a non-top move, and the winning advantage evaporated. Same severity as a blunder, but specifically a "missed conversion."',
 }
 
-// Arrows for the engine's top moves: rank 1 strongest, 2/3 progressively
-// fainter so the principal variation reads as "the" move at a glance.
+// Arrows for the engine's top moves. Rank 1 is green (the move), 2/3 are
+// indigo shades that read as weaker alternatives. Colors are SOLID (no alpha):
+// react-chessboard draws the shaft and arrowhead as two shapes painted with
+// this color, so a translucent color doubles up where they overlap and shows
+// an ugly darker band. Opaque colors render as one flat arrow; the board still
+// shows through because the library applies its own uniform arrow opacity.
 const ENGINE_ARROW_COLORS = [
-  'rgba(34, 197, 94, 0.85)',
-  'rgba(99, 102, 241, 0.55)',
-  'rgba(99, 102, 241, 0.32)',
+  '#22c55e',
+  '#6366f1',
+  '#818cf8',
 ]
 
 const ENGINE_PREF_KEY = 'chess_review_engine_on'
