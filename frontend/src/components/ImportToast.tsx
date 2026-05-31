@@ -44,6 +44,10 @@ export default function ImportToast() {
   const isDone = status?.status === 'done'
   const isFailed = status?.status === 'failed'
   const isActive = stored && status && !isDone && !isFailed
+  // A routine on-open auto-import that pulled no new games and analysed no new
+  // positions did nothing worth announcing — don't leave a "complete" card
+  // sitting there. A real run always reports analyzed_positions > 0.
+  const noWork = !!isDone && (status?.analyzed_positions ?? 0) === 0
 
   useEffect(() => {
     if (!stored || !status) return
@@ -52,11 +56,11 @@ export default function ImportToast() {
   }, [status?.imported_games, status?.analyzed_positions, stored?.playerId, queryClient])
 
   useEffect(() => {
-    if (isDone) {
-      const t = setTimeout(() => setStoredImport(null), 8000)
-      return () => clearTimeout(t)
-    }
-  }, [isDone])
+    if (!isDone) return
+    // Clear a no-op run immediately; show a genuine summary for a few seconds.
+    const t = setTimeout(() => setStoredImport(null), noWork ? 0 : 8000)
+    return () => clearTimeout(t)
+  }, [isDone, noWork])
 
   // Calculate speed (positions/sec). Single effect handles both
   // "anchor baseline on a new job" and "compute delta on each tick" so we
@@ -227,7 +231,7 @@ export default function ImportToast() {
         <p className="text-red-400 text-xs line-clamp-2">✕ {status.error}</p>
       )}
 
-      {stored && isDone && (
+      {stored && isDone && !noWork && (
         <div className="bg-green-900/20 border border-green-800/30 rounded p-2">
           <div className="flex items-center gap-1.5 text-green-400 text-sm font-medium">
             <span>✓</span> Analysis complete
