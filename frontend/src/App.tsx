@@ -14,8 +14,32 @@ import Recommendations from './pages/Recommendations'
 import TacticalPatterns from './pages/TacticalPatterns'
 import EndgameConversion from './pages/EndgameConversion'
 import ImportToast from './components/ImportToast'
-import { getStoredPlayer, getStoredImport, isToastVisible, setToastVisible, onImportChanged } from './lib/storage'
+import { startImport } from './api/client'
+import { getStoredPlayer, getStoredImport, setStoredImport, isToastVisible, setToastVisible, onImportChanged } from './lib/storage'
 import { useTheme } from './lib/theme'
+
+// Set once we've kicked off the on-open import for this window. Lives in
+// sessionStorage (not localStorage) so it resets every time the pywebview
+// window reopens — i.e. the auto-import runs once per app launch, but not on
+// in-app navigation or React StrictMode double-mounts.
+const AUTO_IMPORT_FLAG = 'chess_review_auto_import_done'
+
+// Pull any new games from chess.com automatically when the app opens. The
+// backend skips games already in the local DB (see taskqueue/tasks.py
+// duplicate check), so this is cheap when nothing is new. The ImportToast
+// reacts to setStoredImport() and shows progress on its own.
+function useAutoImportOnOpen() {
+  useEffect(() => {
+    if (sessionStorage.getItem(AUTO_IMPORT_FLAG)) return
+    const saved = getStoredPlayer()
+    if (!saved) return            // nothing imported yet — first run uses the import page
+    if (getStoredImport()) return // an import is already in flight; don't double up
+    sessionStorage.setItem(AUTO_IMPORT_FLAG, '1')
+    startImport(saved.id)
+      .then(({ job_id }) => setStoredImport({ playerId: saved.id, jobId: job_id }))
+      .catch(() => { /* leave it — the Force import button is still available */ })
+  }, [])
+}
 
 function AppRoutes() {
   const navigate = useNavigate()
@@ -49,6 +73,7 @@ function AppRoutes() {
 
 function App() {
   const { theme } = useTheme()
+  useAutoImportOnOpen()
   const bg = theme === 'dark' ? 'bg-[#1a1a2e]' : 'bg-gray-100'
   const navBg = theme === 'dark' ? 'bg-[#16162a] border-gray-700' : 'bg-white border-gray-200'
 
