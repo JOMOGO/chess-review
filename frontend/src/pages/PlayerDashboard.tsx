@@ -66,7 +66,16 @@ export default function PlayerDashboard() {
   if (playerQuery.isLoading) return <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
   if (!player) return <p className="text-red-400">Player not found</p>
 
-  const totalGames = importQuery.data?.imported_games ?? player.total_games_imported
+  // Show the real library size. During a *first* import player.total_games_imported
+  // is still 0, so we fall back to the in-flight job's imported_games for live
+  // feedback — but an incremental import (a few new games on top of an existing
+  // library) reports a tiny imported_games, and that value lingers in the query
+  // cache after the job finishes. Taking the max avoids the dashboard reading
+  // "3 games" when the library actually has hundreds.
+  const totalGames = Math.max(
+    player.total_games_imported,
+    importQuery.data?.imported_games ?? 0,
+  )
 
   const avgAccuracy = trend.length > 0
     ? Math.round((trend.reduce((s, d) => s + d.accuracy, 0) / trend.length) * 10) / 10
